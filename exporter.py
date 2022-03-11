@@ -157,7 +157,7 @@ def channel_history(channel_id, response_url=None, oldest=None, latest=None):
     params = {
         # "token": os.environ["SLACK_USER_TOKEN"],
         "channel": channel_id,
-        "limit": 200,
+        "limit": 1000,
     }
 
     if oldest is not None:
@@ -404,6 +404,11 @@ def parse_replies(threads, users):
 
     return body
 
+def ch_name_from_id(ch_id, ch_list):
+    for channel in ch_list:
+        if channel['id'] == ch_id:
+            return channel['name']
+
 def id_from_ch_name(channel_name, channel_list):
     for channel in channel_list:
         if channel['name'] == channel_name:
@@ -452,14 +457,16 @@ if __name__ == "__main__":
     ts = str(datetime.strftime(datetime.now(), "%m-%d-%Y_%H%M%S"))
     sep_str = "*" * 24
 
+    def get_output_dir_path():
+        return os.path.abspath(
+            os.path.expanduser(os.path.expandvars(a.o))
+        )
+
     def save(data, filename):
         if a.o is None:
             json.dump(print(data), sys.stdout, indent=4)
         else:
-            out_dir_parent = os.path.abspath(
-                os.path.expanduser(os.path.expandvars(a.o))
-            )
-            out_dir = out_dir_parent
+            out_dir = get_output_dir_path()
             filename = filename + ".json" if a.json else filename + ".txt"
             full_filepath = os.path.join(out_dir, filename)
             os.makedirs(os.path.dirname(full_filepath), exist_ok=True)
@@ -470,7 +477,25 @@ if __name__ == "__main__":
                 else:
                     f.write(data)
 
+    def load(filename):
+        full_filepath = os.path.join(get_output_dir_path(), filename + ".json")
+        if os.path.exists(full_filepath):
+            with open(full_filepath, mode="r", encoding="utf-8") as f:
+                return json.load(f)
+        else:
+            print("%s not found in cache. Loading..." % filename)
+
+    def get_channel_replies_save_path(ch_id, ch_list):
+        ch_name, ch_type = name_from_ch_id(ch_id, ch_list)
+        return "%s/%s--replies" % (ch_name, ch_name)
+
     def save_replies(channel_hist, channel_id, channel_list, users):
+        replies_save_path = get_channel_replies_save_path(ch_id, ch_list)
+
+        if load(replies_save_path):
+            print("%s already saved" % replies_save_path)
+            return
+
         reply_timestamps = [x["ts"] for x in channel_hist if "reply_count" in x]
         ch_replies = channel_replies(reply_timestamps, channel_id)
         ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
@@ -484,21 +509,30 @@ if __name__ == "__main__":
             )
             data_replies = parse_replies(ch_replies, users)
             data_replies = "%s\n%s\n\n%s" % (header_str, sep_str, data_replies)
-        save(data_replies, "%s/%s--replies" % (ch_name, ch_name))
+        save(data_replies, replies_save_path)
+
+    def get_channel_save_path(ch_id, ch_list):
+        ch_name, ch_type = name_from_ch_id(ch_id, ch_list)
+        return "%s/%s" % (ch_name, ch_name)
 
     def save_channel(channel_hist, channel_id, channel_list, users):
-        ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
-        if a.json:
-            data_ch = channel_hist
+        channel_save_path = get_channel_save_path(channel_id, channel_list)
+        if not load(channel_save_path):
+            ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
+            if a.json:
+                data_ch = channel_hist
+            else:
+                data_ch = parse_channel_history(channel_hist, users)
+                header_str = "%s Name: %s" % (ch_type, ch_name)
+                data_ch = (
+                    "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
+                    % (channel_id, header_str, len(channel_hist), sep_str)
+                    + data_ch
+                )
+            save(data_ch, channel_save_path)
         else:
-            data_ch = parse_channel_history(channel_hist, users)
-            header_str = "%s Name: %s" % (ch_type, ch_name)
-            data_ch = (
-                "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
-                % (channel_id, header_str, len(channel_hist), sep_str)
-                + data_ch
-            )
-        save(data_ch, "%s/%s" % (ch_name, ch_name))
+            print("%s already saved" % channel_save_path)
+
         if a.r:
             save_replies(channel_hist, channel_id, channel_list, users)
 
@@ -524,7 +558,8 @@ if __name__ == "__main__":
             for ch_name in ch_names:
                 ch_id = id_from_ch_name(ch_name, ch_list)
                 if ch_id:
-                    ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
+                    ch_save_path = get_channel_save_path(ch_id, ch_list)
+                    ch_hist = load(ch_save_path) or channel_history(ch_id, oldest=a.fr, latest=a.to)
                     save_channel(ch_hist, ch_id, ch_list, [])
         else:
             user_list = user_list()

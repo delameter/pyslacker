@@ -127,19 +127,30 @@ def paginated_get(url, params, combine_key=None, response_url=None):
 
 
 def channel_list(team_id=None, response_url=None):
+    channels_path = a.o + "/channels.json"
+    if os.path.exists(channels_path) is True:
+        with open(channels_path, mode="r") as f:
+            return json.load(f)
+
+
     params = {
         # "token": os.environ["SLACK_USER_TOKEN"],
         "team_id": team_id,
-        "types": "public_channel,private_channel,mpim,im",
-        "limit": 200,
+        "types": "public_channel,private_channel",
+        "limit": 1000,
+        "exclude_archived": True
     }
 
-    return paginated_get(
+    channels_list = paginated_get(
         "https://slack.com/api/conversations.list",
         params,
         combine_key="channels",
-        response_url=response_url,
+        response_url=response_url
     )
+
+    save(channels_list, "channels")
+
+    return channels_list
 
 
 def channel_history(channel_id, response_url=None, oldest=None, latest=None):
@@ -163,18 +174,27 @@ def channel_history(channel_id, response_url=None, oldest=None, latest=None):
 
 
 def user_list(team_id=None, response_url=None):
+    users_path = a.o + "/users.json"
+    if os.path.exists(users_path) is True:
+        with open(users_path, mode="r") as f:
+            return json.load(f)
+
     params = {
         # "token": os.environ["SLACK_USER_TOKEN"],
-        "limit": 200,
+        "limit": 1000,
         "team_id": team_id,
     }
 
-    return paginated_get(
+    users = paginated_get(
         "https://slack.com/api/users.list",
         params,
         combine_key="members",
         response_url=response_url,
     )
+
+    save(users, "users")
+
+    return users
 
 
 def channel_replies(timestamps, channel_id, response_url=None):
@@ -384,12 +404,18 @@ def parse_replies(threads, users):
 
     return body
 
+def id_from_ch_name(channel_name, channel_list):
+    for channel in channel_list:
+        if channel['name'] == channel_name:
+            return channel['id']
+    raise
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-o",
-        help="Directory in which to save output files (if left blank, prints to stdout)",
+        help="Directory in which to save output files (if set empty, prints to stdout)",
+        default=".slack-backup"
     )
     parser.add_argument(
         "--lc", action="store_true", help="List all conversations in your workspace"
@@ -401,6 +427,7 @@ if __name__ == "__main__":
         "--json",
         action="store_true",
         help="Give the requested output in raw JSON format (no parsing)",
+        default=True
     )
     parser.add_argument(
         "-c", action="store_true", help="Get history for all accessible conversations"
@@ -428,29 +455,29 @@ if __name__ == "__main__":
 
     def save(data, filename):
         if a.o is None:
-            print(data)
+            json.dump(print(data), sys.stdout, indent=4)
         else:
             out_dir_parent = os.path.abspath(
                 os.path.expanduser(os.path.expandvars(a.o))
             )
-            out_dir = os.path.join(out_dir_parent, "slack_export_%s" % ts)
+            out_dir = out_dir_parent
             filename = filename + ".json" if a.json else filename + ".txt"
-            os.makedirs(out_dir, exist_ok=True)
             full_filepath = os.path.join(out_dir, filename)
+            os.makedirs(os.path.dirname(full_filepath), exist_ok=True)
             print("Writing output to %s" % full_filepath)
-            with open(full_filepath, mode="w") as f:
+            with open(full_filepath, mode="w", encoding="utf-8") as f:
                 if a.json:
-                    json.dump(data, f, indent=4)
+                    json.dump(data, f, indent=4, ensure_ascii=False)
                 else:
                     f.write(data)
 
     def save_replies(channel_hist, channel_id, channel_list, users):
         reply_timestamps = [x["ts"] for x in channel_hist if "reply_count" in x]
         ch_replies = channel_replies(reply_timestamps, channel_id)
+        ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
         if a.json:
             data_replies = ch_replies
         else:
-            ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
             header_str = "Threads in %s: %s\n%s Messages" % (
                 ch_type,
                 ch_name,
@@ -458,44 +485,48 @@ if __name__ == "__main__":
             )
             data_replies = parse_replies(ch_replies, users)
             data_replies = "%s\n%s\n\n%s" % (header_str, sep_str, data_replies)
-        save(data_replies, "channel-replies_%s" % channel_id)
+        save(data_replies, "%s/%s--replies" % (ch_name, ch_name))
 
     def save_channel(channel_hist, channel_id, channel_list, users):
+        ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
         if a.json:
             data_ch = channel_hist
         else:
             data_ch = parse_channel_history(channel_hist, users)
-            ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
             header_str = "%s Name: %s" % (ch_type, ch_name)
             data_ch = (
                 "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
                 % (channel_id, header_str, len(channel_hist), sep_str)
                 + data_ch
             )
-        save(data_ch, "channel_%s" % channel_id)
+        save(data_ch, "%s/%s" % (ch_name, ch_name))
         if a.r:
             save_replies(channel_hist, channel_id, channel_list, users)
 
     ch_list = channel_list()
-    user_list = user_list()
 
     if a.lc:
+        user_list = user_list()
         data = ch_list if a.json else parse_channel_list(ch_list, user_list)
         save(data, "channel_list")
     if a.lu:
+        user_list = user_list()
         data = user_list if a.json else parse_user_list(user_list)
         save(data, "user_list")
     if a.c:
-        ch_id = a.ch
-        if ch_id:
+        ch_name = a.ch
+        if ch_name:
+            ch_id = id_from_ch_name(ch_name, ch_list)
             ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
-            save_channel(ch_hist, ch_id, ch_list, user_list)
+            save_channel(ch_hist, ch_id, ch_list, [])
         else:
+            user_list = user_list()
             for ch_id in [x["id"] for x in ch_list]:
                 ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
-                save_channel(ch_hist, ch_id, ch_list, users)
+                save_channel(ch_hist, ch_id, ch_list, user_list)
     # elif, since we want to avoid asking for channel_history twice
     elif a.r:
+        user_list = user_list()
         for ch_id in [x["id"] for x in channel_list()]:
             ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
             save_replies(ch_hist, ch_id, ch_list, user_list)

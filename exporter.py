@@ -204,7 +204,7 @@ def channel_replies(timestamps, channel_id, response_url=None):
             # "token": os.environ["SLACK_USER_TOKEN"],
             "channel": channel_id,
             "ts": timestamp,
-            "limit": 200,
+            "limit": 1000,
         }
         replies.append(
             paginated_get(
@@ -408,7 +408,6 @@ def id_from_ch_name(channel_name, channel_list):
     for channel in channel_list:
         if channel['name'] == channel_name:
             return channel['id']
-    raise
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -514,11 +513,19 @@ if __name__ == "__main__":
         data = user_list if a.json else parse_user_list(user_list)
         save(data, "user_list")
     if a.c:
-        ch_name = a.ch
-        if ch_name:
-            ch_id = id_from_ch_name(ch_name, ch_list)
-            ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
-            save_channel(ch_hist, ch_id, ch_list, [])
+        ch = a.ch
+        if ch:
+            ch_names = [ch]
+            if ch.endswith('.json'):
+                with open(ch, mode="r") as f:
+                    ch_names = json.load(f)
+            else:
+                ch_names = ch.split(',')
+            for ch_name in ch_names:
+                ch_id = id_from_ch_name(ch_name, ch_list)
+                if ch_id:
+                    ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
+                    save_channel(ch_hist, ch_id, ch_list, [])
         else:
             user_list = user_list()
             for ch_id in [x["id"] for x in ch_list]:

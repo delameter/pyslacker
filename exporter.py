@@ -75,6 +75,7 @@ def get_at_cursor(url, params, cursor=None, response_url=None):
     if cursor is not None:
         params["cursor"] = cursor
 
+    handle_print("DEBUG: Fetching %s [%s]" % (url, params))
     r = get_data(url, params)
 
     if r.status_code != 200:
@@ -102,6 +103,7 @@ def get_at_cursor(url, params, cursor=None, response_url=None):
 
 
 def paginated_get(url, params, combine_key=None, response_url=None):
+    handle_print('DEBUG: Initializing query series: %s [%s]' % (url, params))
     next_cursor = None
     result = []
     while True:
@@ -147,7 +149,7 @@ def channel_list(team_id=None, response_url=None):
         combine_key="channels",
         response_url=response_url
     )
-
+    handle_print('DEBUG: Channel list fetch successful (%d results)' % len(channels_list))
     save(channels_list, "channels")
 
     return channels_list
@@ -165,12 +167,14 @@ def channel_history(channel_id, response_url=None, oldest=None, latest=None):
     if latest is not None:
         params["latest"] = latest
 
-    return paginated_get(
+    result_list = paginated_get(
         "https://slack.com/api/conversations.history",
         params,
         combine_key="messages",
         response_url=response_url,
     )
+    handle_print('DEBUG: Channel history fetch successful (%d results)' % len(result_list))
+    return result_list
 
 
 def user_list(team_id=None, response_url=None):
@@ -436,7 +440,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-c", action="store_true", help="Get history for all accessible conversations"
     )
-    parser.add_argument("--ch", help="With -c, restrict export to given channel ID")
+    parser.add_argument("--ch", help="With -c, restrict export to given channel ID (e.g. \"general\", not abbrev)")
     parser.add_argument(
         "--fr",
         help="With -c, Unix timestamp (seconds since Jan. 1, 1970) for earliest message",
@@ -561,6 +565,8 @@ if __name__ == "__main__":
                     ch_save_path = get_channel_save_path(ch_id, ch_list)
                     ch_hist = load(ch_save_path) or channel_history(ch_id, oldest=a.fr, latest=a.to)
                     save_channel(ch_hist, ch_id, ch_list, [])
+                else:
+                    handle_print("DEBUG: Channel ID not found for name '%s'" % ch_name)
         else:
             user_list = user_list()
             for ch_id in [x["id"] for x in ch_list]:

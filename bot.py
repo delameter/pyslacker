@@ -28,8 +28,8 @@ def export_channel():
     except KeyError:
         return Response("Sorry! I got an unexpected response (KeyError)."), 200
 
-    post_response(response_url, "Retrieving history for this channel...")
-    ch_hist = channel_history(ch_id, response_url)
+    send_post_request(response_url, "Retrieving history for this channel...")
+    ch_hist = fetch_channel_history(ch_id, response_url)
 
     export_mode = str(command_args).lower()
 
@@ -54,13 +54,13 @@ def export_channel():
                 sep,
             )
             data_ch = header_str + parse_channel_history(
-                ch_hist, user_list(team_id, response_url)
+                ch_hist, fetch_user_list(team_id, response_url)
             )
             f.write(data_ch)
         else:
             json.dump(ch_hist, f, indent=4)
 
-    post_response(
+    send_post_request(
         response_url,
         "Done! This channel's history is available for download here (note that this link "
         "is single-use): %s" % loc,
@@ -83,11 +83,11 @@ def export_replies():
     except KeyError:
         return Response("Sorry! I got an unexpected response (KeyError)."), 200
 
-    post_response(response_url, "Retrieving reply threads for this channel...")
+    send_post_request(response_url, "Retrieving reply threads for this channel...")
     print(ch_id)
-    ch_hist = channel_history(ch_id, response_url)
+    ch_hist = fetch_channel_history(ch_id, response_url)
     print(ch_hist)
-    ch_replies = channel_replies(
+    ch_replies = fetch_channel_replies(
         [x["ts"] for x in ch_hist if "reply_count" in x],
         ch_id,
         response_url=response_url,
@@ -104,7 +104,7 @@ def export_replies():
 
     if export_mode == "text":
         header_str = "Threads in: %s\n%s Messages" % (ch_name, len(ch_replies))
-        data_replies = parse_replies(ch_replies, user_list(team_id, response_url))
+        data_replies = parse_replies(ch_replies, fetch_user_list(team_id, response_url))
         sep = "=" * 24
         data_replies = "%s\n%s\n\n%s" % (header_str, sep, data_replies)
     else:
@@ -119,7 +119,7 @@ def export_replies():
         else:
             json.dump(data_replies, f, indent=4)
 
-    post_response(
+    send_post_request(
         response_url,
         "Done! This channel's reply threads are available for download here (note that this "
         "link is single-use): %s" % loc,

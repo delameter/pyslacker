@@ -1,37 +1,39 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import os
 import sys
-import time
+from argparse import RawDescriptionHelpFormatter
+from typing import List
+
 import requests
 import json
 from datetime import datetime
 import argparse
 from dotenv import load_dotenv
-from time import sleep
 
-# when rate-limited, add this to the wait time
-ADDITIONAL_SLEEP_TIME = 2
+from requests import Response
+
+from logger import Logger
+from request_series_printer import RequestSeriesPrinter
+from adaptive_request_manager import AdaptiveRequestManager
+from io_common import fmt_sizeof
 
 env_file = os.path.join(os.path.dirname(__file__), ".env")
 if os.path.isfile(env_file):
     load_dotenv(env_file)
 
-
-# write handling
-
-
-def post_response(response_url, text):
-    requests.post(response_url, json={"text": text})
-
-
 # use this to say anything
 # will print to stdout if no response_url is given
 # or post_response to given url if provided
+logger = None
 def handle_print(text, response_url=None):
     if response_url is None:
         print(text)
+        if logger:
+            logger.log_line(text)
     else:
-        post_response(response_url, text)
+        send_post_request(response_url, text)
 
 
 # slack api (OAuth 2.0) now requires auth tokens in HTTP Authorization header
@@ -39,54 +41,59 @@ def handle_print(text, response_url=None):
 try:
     HEADERS = {"Authorization": "Bearer %s" % os.environ["SLACK_USER_TOKEN"]}
 except KeyError:
-    handle_print("Missing SLACK_USER_TOKEN in environment variables", response_url)
+    handle_print("Missing SLACK_USER_TOKEN in environment variables")
     sys.exit(1)
 
 
-def _get_data(url, params):
-    return requests.get(url, headers=HEADERS, params=params)
+def send_get_request(url, params):
+    return requests.get(url, headers=HEADERS, params=params, timeout=(10, 30), )
 
 
-def get_data(url, params):
+def send_post_request(url, text):
+    requests.post(url, json={"text": text})
+
+
+def perform_request_with_retries(url, params) -> Response:
     """Naively deals with rate-limiting"""
 
-    # success means "not rate-limited", it can still end up with error
     success = False
-    attempt = 0
+    attempt_num = 0
 
     while not success:
-        r = _get_data(url, params)
-        attempt += 1
+        attempt_num += 1
+        request_series_printer.before_request_attempt(attempt_num)
+        try:
+            r: Response = send_get_request(url, params)
+        except Exception as e:
+            adaptive_request_manager.on_transport_error(attempt_num, str(e))
+            handle_print("ERROR: Attempt {:d} failed. {:s}".format(attempt_num, str(e)))
+            continue
 
-        if r.status_code != 429:
-            success = True
-        else:
-            retry_after = int(r.headers["Retry-After"])  # seconds to wait
-            sleep_time = retry_after + ADDITIONAL_SLEEP_TIME
-            print(f"Rate-limited. Retrying after {sleep_time} seconds ({attempt}x).")
-            sleep(sleep_time)
-    return r
+        adaptive_request_manager.on_request_completion(r)
+        if not r.ok:
+            if r.status_code == 429:
+                retry_after_sec = float(r.headers["Retry-After"])
+                adaptive_request_manager.on_rate_limited_request_fail(retry_after_sec)
+                continue
+
+            if attempt_num >= AdaptiveRequestManager.RETRY_MAX_NUM:
+                handle_print("ERROR: Max retry amount exceeded")
+                sys.exit(1)
+            continue
+
+        return r
 
 
-# pagination handling
-
-
-def get_at_cursor(url, params, cursor=None, response_url=None):
+def fetch_at_cursor(url, params, cursor=None, response_url=None):
     if cursor is not None:
         params["cursor"] = cursor
 
-    handle_print("DEBUG: Fetching %s [%s]" % (url, params))
-    r = get_data(url, params)
-
-    if r.status_code != 200:
-        handle_print("ERROR: %s %s" % (r.status_code, r.reason), response_url)
-        sys.exit(1)
-
+    r = perform_request_with_retries(url, params)
     d = r.json()
 
     try:
         if d["ok"] is False:
-            handle_print("I encountered an error: %s" % d, response_url)
+            handle_print("API error encountered: %s" % d, response_url)
             sys.exit(1)
 
         next_cursor = None
@@ -102,12 +109,12 @@ def get_at_cursor(url, params, cursor=None, response_url=None):
         return None, []
 
 
-def paginated_get(url, params, combine_key=None, response_url=None):
-    handle_print('DEBUG: Initializing query series: %s [%s]' % (url, params))
+def fetch_paginated(url, params, combine_key=None, response_url=None):
     next_cursor = None
     result = []
     while True:
-        next_cursor, data = get_at_cursor(
+        request_series_printer.before_request(params)
+        next_cursor, data = fetch_at_cursor(
             url, params, cursor=next_cursor, response_url=response_url
         )
 
@@ -115,94 +122,132 @@ def paginated_get(url, params, combine_key=None, response_url=None):
             result.extend(data) if combine_key is None else result.extend(
                 data[combine_key]
             )
-        except KeyError:
+        except KeyError as e:
             handle_print("Something went wrong: %s." % e, response_url)
             sys.exit(1)
 
         if next_cursor is None:
             break
-
     return result
 
 
 # GET requests
 
 
-def channel_list(team_id=None, response_url=None):
+def fetch_channel_list(team_id=None, response_url=None):
     channels_path = a.o + "/channels.json"
-    if os.path.exists(channels_path) is True:
+    if os.path.exists(channels_path) is True:  # @FIXME load_from_cache() ?
         with open(channels_path, mode="r") as f:
-            return json.load(f)
+            cached = json.load(f)
+            handle_print(f'Channel list loaded from cache: {len(cached):d} channels')
+            return cached
 
-
+    handle_print('Channel list fetch starts')
+    api_url = "https://slack.com/api/conversations.list",
     params = {
         # "token": os.environ["SLACK_USER_TOKEN"],
         "team_id": team_id,
-        "types": "public_channel,private_channel",
+        "types": ','.join([
+            'public_channel',
+            'private_channel',
+            'im'  # direct messages. make optional?
+        ]),
         "limit": 1000,
         "exclude_archived": True
     }
 
-    channels_list = paginated_get(
-        "https://slack.com/api/conversations.list",
+    adaptive_request_manager.reinit()
+    request_series_printer.reinit()
+    request_series_printer.before_paginated_batch(api_url)
+    channels_list = fetch_paginated(
+        api_url,
         params,
         combine_key="channels",
         response_url=response_url
     )
-    handle_print('DEBUG: Channel list fetch successful (%d results)' % len(channels_list))
+    request_series_printer.after_paginated_batch()
+    handle_print(f'Channel list fetch successful: {len(channels_list):d} channels')
     save(channels_list, "channels")
 
     return channels_list
 
 
-def channel_history(channel_id, response_url=None, oldest=None, latest=None):
+def fetch_channel_history(channel_id, response_url=None, oldest=None, latest=None):
+    handle_print(f'Channel history fetch starts ({channel_id})')
     params = {
         # "token": os.environ["SLACK_USER_TOKEN"],
         "channel": channel_id,
         "limit": 1000,
     }
+    api_url = "https://slack.com/api/conversations.history"
 
     if oldest is not None:
         params["oldest"] = oldest
     if latest is not None:
         params["latest"] = latest
 
-    result_list = paginated_get(
-        "https://slack.com/api/conversations.history",
+    adaptive_request_manager.reinit()
+    request_series_printer.reinit()
+    request_series_printer.before_paginated_batch(api_url)
+    result_list = fetch_paginated(
+        api_url,
         params,
         combine_key="messages",
         response_url=response_url,
     )
-    handle_print('DEBUG: Channel history fetch successful (%d results)' % len(result_list))
+    request_series_printer.after_paginated_batch()
+    handle_print(f'Channel history fetch successful ({channel_id}): {len(result_list):d} results')
     return result_list
 
 
-def user_list(team_id=None, response_url=None):
+# @TODO reads from users.json, writes to users.json and user_list.json. bug? wut
+def fetch_user_list(team_id=None, response_url=None):
     users_path = a.o + "/users.json"
-    if os.path.exists(users_path) is True:
+    if os.path.exists(users_path) is True:  # @FIXME load_from_cache() ?
         with open(users_path, mode="r") as f:
-            return json.load(f)
+            cached = json.load(f)
+            handle_print(f'User list loaded from cache: {len(cached):d} users')
+            return cached
 
+    handle_print('User list fetch begins')
+    api_url = "https://slack.com/api/users.list",
     params = {
         # "token": os.environ["SLACK_USER_TOKEN"],
         "limit": 1000,
         "team_id": team_id,
     }
-
-    users = paginated_get(
-        "https://slack.com/api/users.list",
+    request_series_printer.reinit()
+    adaptive_request_manager.reinit()
+    request_series_printer.before_paginated_batch(api_url)
+    users = fetch_paginated(
+        api_url,
         params,
         combine_key="members",
         response_url=response_url,
     )
+    request_series_printer.after_paginated_batch()
 
+    handle_print(f'User list fetch successful: {len(users):d} users')
     save(users, "users")
 
     return users
 
 
-def channel_replies(timestamps, channel_id, response_url=None):
+def fetch_channel_replies(timestamps, channel_id, response_url=None):
+    requests_estimated = len(timestamps)
+    if requests_estimated == 0:
+        handle_print(f'No timestamps - no replies. Skipping ({channel_id})')
+        return []
+
+    handle_print(f'Channel replies fetch starts ({channel_id})')
+    handle_print(f'Request amount (estimated): {requests_estimated:d}')
+    request_series_printer.reinit(requests_estimated)
+    adaptive_request_manager.reinit()
+
     replies = []
+    api_url = "https://slack.com/api/conversations.replies"
+
+    request_series_printer.before_paginated_batch(api_url)
     for timestamp in timestamps:
         params = {
             # "token": os.environ["SLACK_USER_TOKEN"],
@@ -210,15 +255,16 @@ def channel_replies(timestamps, channel_id, response_url=None):
             "ts": timestamp,
             "limit": 1000,
         }
-        replies.append(
-            paginated_get(
-                "https://slack.com/api/conversations.replies",
-                params,
-                combine_key="messages",
-                response_url=response_url,
-            )
+        result = fetch_paginated(
+            api_url,
+            params,
+            combine_key="messages",
+            response_url=response_url,
         )
+        replies.append(result)
 
+    request_series_printer.after_paginated_batch()
+    handle_print(f'Channel replies fetch successful ({channel_id}): {len(replies):d} results')
     return replies
 
 
@@ -354,7 +400,7 @@ def parse_channel_history(msgs, users, check_thread=False):
             "%m-%d-%y %H:%M:%S"
         )
         text = msg["text"] if msg["text"].strip() != "" else "[no message content]"
-        for u in [x["id"] for x in users]:
+        for u in [x["id"] for x in users]:  # it takes BILLIONS to iterate user list with 50k users. refactoring required
             text = str(text).replace(
                 "<@%s>" % u, "<@%s> (%s)" % (u, name_from_uid(u, users))
             )
@@ -408,22 +454,33 @@ def parse_replies(threads, users):
 
     return body
 
+
 def ch_name_from_id(ch_id, ch_list):
+    # return ch_map_id.get(ch_id)['name']
     for channel in ch_list:
         if channel['id'] == ch_id:
             return channel['name']
 
+
 def id_from_ch_name(channel_name, channel_list):
     for channel in channel_list:
-        if channel['name'] == channel_name:
+        if channel.get('name', None) == channel_name:
             return channel['id']
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        formatter_class=RawDescriptionHelpFormatter,
+        epilog='\n'.join([
+            "RATE LIMIT COMPENSAION",
+            'This program considers rate limiting and by default dynamically adjusts post-request delay to minimize limit errors and work with reasonable speed at the same time. When <MAX_RPM> is not set, delay will slowly decrease after some amount of succeessful requests in a row and increase after failed requests. When <MAX_RPS> is set, adjuster works almost the same, except that it will try to keep request ratio not bigger than option.\n\nOption -A disables dynamic compensation completely - program just waits a few seconds and then retry. Delay duration is read from "Retry-After" header (if it is provided by web-server) - this algorithm is independent from dynamic compensation and works always).'
+        ])
+    )
     parser.add_argument(
         "-o",
         help="Directory in which to save output files (if set empty, prints to stdout)",
-        default=".slack-backup"
+        default=".slack-backup",
+        action="store", type=str
     )
     parser.add_argument(
         "--lc", action="store_true", help="List all conversations in your workspace"
@@ -438,9 +495,13 @@ if __name__ == "__main__":
         default=True
     )
     parser.add_argument(
-        "-c", action="store_true", help="Get history for all accessible conversations"
+        "-c", action="store_true", help="Get history for all accessible conversations (filters available, see below)"
     )
-    parser.add_argument("--ch", help="With -c, restrict export to given channel ID (e.g. \"general\", not abbrev)")
+    parser.add_argument(
+        "--ch",
+        metavar='<NAME>|<FILE>.json',
+        help="With -c, restrict export to given channel name (e.g. \"general\", not abbrev). Also can be a filename which stores json-encoded array of channel names."
+    )
     parser.add_argument(
         "--fr",
         help="With -c, Unix timestamp (seconds since Jan. 1, 1970) for earliest message",
@@ -454,17 +515,36 @@ if __name__ == "__main__":
     parser.add_argument(
         "-r",
         action="store_true",
-        help="Get reply threads for all accessible conversations",
+        help="Get reply threads for all accessible conversations. Implies -c, but conversation history data is not writed to files at the end. Using them together (-cr) will save a lot of time if you want both history and replies",
+    )
+    arm_group = parser.add_mutually_exclusive_group()
+    arm_group.add_argument(
+        "-x",
+        metavar='<MAX_RPM>',
+        action="store",
+        type=float,
+        help="Set max requests per minute; request delays will be dynamically adjusted to keep real RPM as close as possible to it (default = 0, auto) (see below)."
+    )
+    arm_group.add_argument(
+        "-A",
+        action="store_true",
+        help="Disable adaptive rate limit compensation mechanism (see below)."
     )
 
     a = parser.parse_args()
     ts = str(datetime.strftime(datetime.now(), "%m-%d-%Y_%H%M%S"))
     sep_str = "*" * 24
 
+    logger = Logger.get_instance()
+    request_series_printer = RequestSeriesPrinter.get_instance()
+    adaptive_request_manager = AdaptiveRequestManager.get_instance()
+    adaptive_request_manager.apply_app_args(a)
+
     def get_output_dir_path():
         return os.path.abspath(
             os.path.expanduser(os.path.expandvars(a.o))
         )
+
 
     def save(data, filename):
         if a.o is None:
@@ -474,34 +554,39 @@ if __name__ == "__main__":
             filename = filename + ".json" if a.json else filename + ".txt"
             full_filepath = os.path.join(out_dir, filename)
             os.makedirs(os.path.dirname(full_filepath), exist_ok=True)
-            print("Writing output to %s" % full_filepath)
+            print("Writing output to %s... " % full_filepath, end='', flush=True)
+            # @TODO it takes a lot of time to encode 50-mb json and app is
+            # unrepsonsive all that time. asynchronus I/O can solve the problem
+            # and also it can provide real-time work progress
+            if a.json:
+                data = json.dumps(data, indent=4, ensure_ascii=False)
             with open(full_filepath, mode="w", encoding="utf-8") as f:
-                if a.json:
-                    json.dump(data, f, indent=4, ensure_ascii=False)
-                else:
-                    f.write(data)
+                f.write(data)
+            print(f"Done ({fmt_sizeof(len(data)).strip()})")
 
-    def load(filename):
+    def load_from_cache(filename) -> List|None:
+        # if file is found: read it and return list
+        # if file is not found: return None
         full_filepath = os.path.join(get_output_dir_path(), filename + ".json")
         if os.path.exists(full_filepath):
             with open(full_filepath, mode="r", encoding="utf-8") as f:
                 return json.load(f)
         else:
-            print("%s not found in cache. Loading..." % filename)
+            print(f"Cache miss: {filename}")
+            return None
 
     def get_channel_replies_save_path(ch_id, ch_list):
-        ch_name, ch_type = name_from_ch_id(ch_id, ch_list)
-        return "%s/%s--replies" % (ch_name, ch_name)
+        return "%s--replies" % get_channel_save_path(ch_id, ch_list)
 
-    def save_replies(channel_hist, channel_id, channel_list, users):
+    def save_channel_replies(channel_hist, channel_id, channel_list, users):
         replies_save_path = get_channel_replies_save_path(ch_id, ch_list)
 
-        if load(replies_save_path):
-            print("%s already saved" % replies_save_path)
+        if load_from_cache(replies_save_path) is not None:  # can be empty list
+            print(f"Channel replies found in cache, skipping: {replies_save_path}")
             return
 
         reply_timestamps = [x["ts"] for x in channel_hist if "reply_count" in x]
-        ch_replies = channel_replies(reply_timestamps, channel_id)
+        ch_replies = fetch_channel_replies(reply_timestamps, channel_id)
         ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
         if a.json:
             data_replies = ch_replies
@@ -519,9 +604,9 @@ if __name__ == "__main__":
         ch_name, ch_type = name_from_ch_id(ch_id, ch_list)
         return "%s/%s" % (ch_name, ch_name)
 
-    def save_channel(channel_hist, channel_id, channel_list, users):
+    def save_channel_history(channel_hist, channel_id, channel_list, users):
         channel_save_path = get_channel_save_path(channel_id, channel_list)
-        if not load(channel_save_path):
+        if load_from_cache(channel_save_path) is None:
             ch_name, ch_type = name_from_ch_id(channel_id, channel_list)
             if a.json:
                 data_ch = channel_hist
@@ -529,28 +614,30 @@ if __name__ == "__main__":
                 data_ch = parse_channel_history(channel_hist, users)
                 header_str = "%s Name: %s" % (ch_type, ch_name)
                 data_ch = (
-                    "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
-                    % (channel_id, header_str, len(channel_hist), sep_str)
-                    + data_ch
+                        "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
+                        % (channel_id, header_str, len(channel_hist), sep_str)
+                        + data_ch
                 )
             save(data_ch, channel_save_path)
         else:
-            print("%s already saved" % channel_save_path)
+            print(f"Channel history found in cache, skipping: {channel_save_path}")
 
         if a.r:
-            save_replies(channel_hist, channel_id, channel_list, users)
+            save_channel_replies(channel_hist, channel_id, channel_list, users)
 
-    ch_list = channel_list()
+    ch_list = fetch_channel_list()
+    ch_map_id = {v.get('id'): v for v in ch_list}  # @TODO optimize find-by-id methods
 
     if a.lc:
-        user_list = user_list()
+        user_list = fetch_user_list()
         data = ch_list if a.json else parse_channel_list(ch_list, user_list)
         save(data, "channel_list")
     if a.lu:
-        user_list = user_list()
+        user_list = fetch_user_list()
         data = user_list if a.json else parse_user_list(user_list)
         save(data, "user_list")
     if a.c:
+        user_list = fetch_user_list()
         ch = a.ch
         if ch:
             ch_names = [ch]
@@ -559,22 +646,28 @@ if __name__ == "__main__":
                     ch_names = json.load(f)
             else:
                 ch_names = ch.split(',')
+            ch_names = [ch.lstrip('#') for ch in ch_names]
             for ch_name in ch_names:
                 ch_id = id_from_ch_name(ch_name, ch_list)
+                # what if it WAS an id from the beginning?
+                if not ch_id:
+                    if ch_name in ch_map_id.keys():
+                        ch_id = ch_name
                 if ch_id:
                     ch_save_path = get_channel_save_path(ch_id, ch_list)
-                    ch_hist = load(ch_save_path) or channel_history(ch_id, oldest=a.fr, latest=a.to)
-                    save_channel(ch_hist, ch_id, ch_list, [])
+                    ch_hist = load_from_cache(ch_save_path)
+                    if ch_hist is None:
+                        ch_hist = fetch_channel_history(ch_id, oldest=a.fr, latest=a.to)
+                    save_channel_history(ch_hist, ch_id, ch_list, user_list)
                 else:
-                    handle_print("DEBUG: Channel ID not found for name '%s'" % ch_name)
+                    handle_print(f"Channel ID not found for name '{ch_name}', skipping")
         else:
-            user_list = user_list()
             for ch_id in [x["id"] for x in ch_list]:
-                ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
-                save_channel(ch_hist, ch_id, ch_list, user_list)
+                ch_hist = fetch_channel_history(ch_id, oldest=a.fr, latest=a.to)
+                save_channel_history(ch_hist, ch_id, ch_list, user_list)
     # elif, since we want to avoid asking for channel_history twice
     elif a.r:
-        user_list = user_list()
-        for ch_id in [x["id"] for x in channel_list()]:
-            ch_hist = channel_history(ch_id, oldest=a.fr, latest=a.to)
-            save_replies(ch_hist, ch_id, ch_list, user_list)
+        user_list = fetch_user_list()
+        for ch_id in [x["id"] for x in fetch_channel_list()]:
+            ch_hist = fetch_channel_history(ch_id, oldest=a.fr, latest=a.to)
+            save_channel_replies(ch_hist, ch_id, ch_list, user_list)

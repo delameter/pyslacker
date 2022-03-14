@@ -5,48 +5,67 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 from io import FileIO
 from typing import Optional
 
-from abstract_singleton import AbstractSingleton
 from sgr import SGRRegistry
 
 
-class Logger(AbstractSingleton):
+class Logger:
     CR_LF_REGEX = re.compile(r'[\r\n]+')
 
-    @classmethod
-    def _construct(cls) -> Logger:
-        return Logger(cls._create_key)
+    _instance: Logger = None
 
-    def __init__(self, _key=None):
-        super().__init__(_key)
+    @classmethod
+    def get_instance(cls):
+        if not cls._instance:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        super().__init__()
         self._buf = ''
         self._fileio: Optional[FileIO] = None
 
         self._open_io()
 
-    def log_append(self, s: str):
+    def log(self, text: str, level: str = 'info', buffered: bool = False):
+        if buffered:
+            self._buf += text
+            return
         if not self._fileio:
             return
-        s = SGRRegistry.remove_sgr_seqs(s)
-        s = self.CR_LF_REGEX.sub('', s)
-        self._buf += s
 
-    def log_line(self, s: str):
-        self.log_append(s)
-        self.flush()
-
-    def flush(self):
-        if not self._fileio or not self._buf:
-            return
-        ts = time.strftime("[%Y-%m-%d %H:%M:%S] ", time.gmtime())
-        print(ts + self._buf, file=self._fileio, end='\n', flush=True)
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        print(f'[{ts}] {level.upper()}: {self._buf + text}',
+              file=self._fileio,
+              end='\n',
+              flush=True)
         self._buf = ''
 
-    def error(self, text: str):
-        self.log_line(text)
+    def debug(self, text: str, silent: bool = True):
+        if not silent:
+            print(text, file=sys.stdout)
+        self.log(text, 'debug')
+
+    def info(self, text: str, silent: bool = False):
+        if not silent:
+            print(text, file=sys.stdout)
+        self.log(text, 'info')
+
+    def warn(self, text: str, silent: bool = False):
+        if not silent:
+            print(f'{SGRRegistry.FMT_YELLOW!s}{text}{SGRRegistry.FMT_RESET!s}',
+                  file=sys.stdout)
+        self.log(text, 'warn')
+
+    def error(self, text: str, silent: bool = False):
+        if not silent:
+            print(f'{SGRRegistry.FMT_RED!s}{text}{SGRRegistry.FMT_RESET!s}',
+                  file=sys.stderr)
+        self.log(text, 'error')
 
     def _get_current_file_name(self) -> str:
         return time.strftime("./log/log.%Y-%m-%d.log", time.gmtime())

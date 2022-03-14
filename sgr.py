@@ -1,13 +1,11 @@
 # -----------------------------------------------------------------------------
-# SGR ANSI control sequences helper
+# SGR (Select Graphic Rendition) ANSI control sequences helpers
 # 2022 A. Shavykin <0.delameter@gmail.com>
 # -----------------------------------------------------------------------------
 import re
 
 
 class SGRSequence:
-    # SGR — Select Graphic Rendition, one of the CSI codes
-
     CONTROL_CHARACTER = '\033'
     INTRODUCER = '['
     SEPARATOR = ';'
@@ -33,10 +31,11 @@ class SGRRegistry:
     FMT_GREEN = SGRSequence(32)
     FMT_YELLOW = SGRSequence(33)
     FMT_BLUE = SGRSequence(34)
+    FMT_HI_YELLOW = SGRSequence(93)
 
     SGR_REGEX = re.compile(r'\033\[[0-9;]*m')
 
     @staticmethod
     def remove_sgr_seqs(s: str) -> str:
-        # remove all SGR escape sequences
+        # remove all SGR escape sequences, keep the content between
         return SGRRegistry.SGR_REGEX.sub('', s)

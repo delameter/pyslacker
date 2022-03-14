@@ -1,17 +1,12 @@
-import os
-import requests
-from flask import Flask, request, Response
 from urllib.parse import urljoin
 from uuid import uuid4
-import json
-from dotenv import load_dotenv
+
+from flask import Flask, request, Response
+
 from exporter import *
 
 app = Flask(__name__)
 load_dotenv(os.path.join(app.root_path, ".env"))
-
-
-# Flask routes
 
 
 @app.route("/slack/events/export-channel", methods=["POST"])

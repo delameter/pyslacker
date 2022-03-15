@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-import sys
 from random import randint, random
 from time import sleep
 
-from io_common import AutoFloat
 from logger import Logger
 from request_series_printer import RequestSeriesPrinter
 
@@ -11,12 +9,24 @@ logger = Logger.get_instance()
 
 request_series_printer = RequestSeriesPrinter.get_instance()
 
+request_series_printer.reinit(32)
+request_series_printer.before_paginated_batch(f'est20')
+for req_id in range(1, 100):
+    request_series_printer.before_request({})
+    request_series_printer.before_request_attempt(randint(1, 2))
+    request_series_printer.update_statistics(True, 0, 1)
+    request_series_printer.on_request_completion(randint(200, 209), True)
+    #request_series_printer._preserve_current_line()
+    sleep(0.07)
+request_series_printer.after_paginated_batch()
+
 for batch_idx, max_req in enumerate([100, 2000, 100]):
     request_series_printer.reinit(1111)
-    request_series_printer.before_paginated_batch(f'max_i={max_req}')
 
     if batch_idx == 2:
-        logger._fileio = sys.stdout
+        request_series_printer._requests_estimated = 0
+    request_series_printer.before_paginated_batch(f'max_i={max_req}')
+
 
     for req_id in range(1, max_req):
         request_series_printer.before_request({})

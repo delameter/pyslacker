@@ -3,10 +3,12 @@
 # 2022 A. Shavykin <0.delameter@gmail.com>
 # -----------------------------------------------------------------------------
 import re
-from math import floor, trunc
+from math import trunc
+
+from math import floor
+from typing import List
 
 from sgr import SGRSequence, SGRRegistry
-
 
 time_units = [
     {"name": "sec", "in_next": 60},
@@ -14,7 +16,7 @@ time_units = [
     {"name": "hr", "in_next": 24},
     {"name": "day", "in_next": 30},
     {"name": "mon", "in_next": 12},
-    {"name": "yr", "in_next": None},
+    {"name": "yr", "in_next": 0},
 ]
 
 
@@ -35,7 +37,7 @@ def fmt_time_delta(seconds: float) -> str:
         if num < 1:
             return f'<1 {unit_name:3s}'
         elif not next_unit_ratio:
-            return f'{num:>7.1e}'
+            return f'{seconds:>6.0e}'
         elif num < 10 and (unit_name == "hr" or unit_name == "mon"):
             return f'{num:1.0f}{unit_name[0]:1s} {prev_frac:<3s}'
         elif num < next_unit_ratio:
@@ -119,34 +121,64 @@ class AutoFloat(float):
 
 
 class BackgroundProgressBar:
-    def __init__(self, highlight_open_seq: SGRSequence = None,
-                 regular_open_seq: SGRSequence = None,
-                 source_str: str = '', ratio: float = .0):
+    FILL_CHARS: List[str] = [' ', '▏','▎','▍','▌','▋','▊','▉','█']
+    FILLED_0: str = FILL_CHARS[0]
+    FILLED_100: str = FILL_CHARS[-1]
+
+    def __init__(self,
+                 highlight_open_seq: SGRSequence = None,
+                 regular_open_seq: SGRSequence = None):
         super().__init__()
         self._highlight_open_seq: SGRSequence = highlight_open_seq
         self._regular_open_seq: SGRSequence = regular_open_seq
-        self._source_str: str
-        self._ratio: float
+        self.reset()
 
-        self.update(source_str, ratio)
+    def reset(self):
+        self._source_str = ''
+        self._ratio = 0.0
+        self._indicator_size = 5
+        self._indent_size = 2
 
-    def update(self, source_str: str, ratio: float):
-        self._source_str = source_str
-        self._ratio = max(0.0, min(1.0, ratio))
+    def update(self, source_str: str = None, ratio: float = None, indicator_size: int = None, indent_size: int = None):
+        if source_str is not None:
+            self._source_str = source_str
+        if ratio is not None:
+            self._ratio = max(0.0, min(1.0, ratio))
+        if indicator_size is not None:
+            self._indicator_size = max(0, indicator_size)
+        if indent_size is not None:
+            self._indent_size = max(0, indent_size)
 
-    def format(self):
-        highlight_len = max(0, floor(self._ratio * len(self._source_str)))
-        highlight_part = self._source_str[:highlight_len]
-        regular_part = self._source_str[highlight_len:]
-        left_part_len = highlight_len + 1  # +paddings
-        right_part_len = len(self._source_str) - highlight_len + 1
+    def render(self) -> str:
+        if self._indicator_size == 0:
+            return ''
+
+        filled_part_len = max(0, floor(self._ratio * self._indicator_size))
+        empty_part_len = max(0, self._indicator_size - 1 - filled_part_len)  # excl. cursor
+
+        filled_part = self.FILLED_100 * filled_part_len
+        empty_part = self.FILLED_0 * empty_part_len
+        cursor_ratio = self._indicator_size * self._ratio - filled_part_len
+        cursor = self.FILL_CHARS[round((len(self.FILL_CHARS) - 1) * cursor_ratio)]
 
         return f'{self._highlight_open_seq}' + \
-               ' ' + \
-               f'{highlight_part:>{left_part_len}s}' + \
+               f'{filled_part:>{filled_part_len + self._indent_size}s}' + \
+               f'{cursor:s}' + \
                f'{SGRRegistry.FMT_RESET}{self._regular_open_seq}' + \
-               f'{regular_part:<{right_part_len}s}' + \
-               ' ' + \
+               f'{empty_part:<{empty_part_len + self._indent_size}s}' + \
+               f'{SGRRegistry.FMT_RESET}'
+
+    def format(self) -> str:
+        left_part_len = max(0, floor(self._ratio * self._indicator_size))
+        left_part = self._source_str[:left_part_len]
+        right_part = self._source_str[left_part_len:]
+        right_part_len = self._indicator_size - left_part_len + self._indent_size
+        left_part_len += self._indent_size
+
+        return f'{self._highlight_open_seq}' + \
+               f'{left_part:>{left_part_len}s}' + \
+               f'{SGRRegistry.FMT_RESET}{self._regular_open_seq}' + \
+               f'{right_part:<{right_part_len}s}' + \
                f'{SGRRegistry.FMT_RESET}'
 
     def __str__(self):

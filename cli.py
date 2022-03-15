@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import traceback
-from argparse import RawDescriptionHelpFormatter
+from argparse import RawDescriptionHelpFormatter, Namespace
 from typing import List
 
 import requests
@@ -24,22 +24,22 @@ from requests import Response
 from logger import Logger
 from request_series_printer import RequestSeriesPrinter
 from adaptive_request_manager import AdaptiveRequestManager
-from io_common import fmt_sizeof
+from util.io import fmt_sizeof
 
 
 # noinspection PyMethodMayBeStatic
-class App:
+class Cli:
     @staticmethod
     def send_post_request(url, text):
         requests.post(url, json={"text": text})
 
     @staticmethod
-    def fetch_at_cursor(url, params, cursor=None, response_url=None):
+    def fetch_at_cursor(url, params, cursor=None):
         if cursor is not None:
             params["cursor"] = cursor
 
-        response: Response|None = App.adaptive_request_manager.perform_retriable_request(
-            lambda: requests.get(url, headers=App.HEADERS, params=params, timeout=(10, 30))
+        response: Response|None = Cli.adaptive_request_manager.perform_retriable_request(
+            lambda: requests.get(url, headers=Cli.HEADERS, params=params, timeout=(10, 30))
         )
         if not response:
             sys.exit(1)
@@ -47,7 +47,7 @@ class App:
 
         try:
             if d["ok"] is False:
-                App.logger.error(f'API error encountered: {d!s}' % d)
+                Cli.logger.error(f'API error encountered: {d!s}' % d)
                 sys.exit(1)
 
             next_cursor = None
@@ -59,17 +59,17 @@ class App:
             return next_cursor, d
 
         except KeyError as e:
-            App.logger.error(f'Response processing error: {e!s}')
+            Cli.logger.error(f'Response processing error: {e!s}')
             return None, []
 
     @staticmethod
-    def fetch_paginated(url, params, combine_key=None, response_url=None):
+    def fetch_paginated(url, params, combine_key=None):
         next_cursor = None
         result = []
         while True:
-            App.request_series_printer.before_request(params)
-            next_cursor, data = App.fetch_at_cursor(
-                url, params, cursor=next_cursor, response_url=response_url
+            Cli.request_series_printer.before_request(params)
+            next_cursor, data = Cli.fetch_at_cursor(
+                url, params, cursor=next_cursor,
             )
 
             try:
@@ -77,7 +77,7 @@ class App:
                     data[combine_key]
                 )
             except KeyError as e:
-                App.logger.error(f'Response processing error: {e!s}')
+                Cli.logger.error(f'Response processing error: {e!s}')
                 sys.exit(1)
 
             if next_cursor is None:
@@ -85,16 +85,16 @@ class App:
         return result
 
     @staticmethod
-    def fetch_channel_list(team_id=None, response_url=None):
-        channels_path = App.a.o + "/channels.json"
+    def fetch_channel_list(team_id=None):
+        channels_path = Cli.a.o + "/channels.json"
         if os.path.exists(channels_path) is True:  # @FIXME load_from_cache() ?
             with open(channels_path, mode="r") as f:
                 cached = json.load(f)
-                App.logger.info(f'Channel list loaded from cache: {len(cached):d} channels')
+                Cli.logger.info(f'Channel list loaded from cache: {len(cached):d} channels')
                 return cached
 
-        App.logger.info('Channel list fetching starts...')
-        api_url = "https://slack.com/api/conversations.list",
+        Cli.logger.info('Channel list fetching starts...')
+        api_url = "https://slack.com/api/conversations.list"
         params = {
             # "token": os.environ["SLACK_USER_TOKEN"],
             "team_id": team_id,
@@ -107,24 +107,23 @@ class App:
             "exclude_archived": True
         }
 
-        App.adaptive_request_manager.reinit()
-        App.request_series_printer.reinit()
-        App.request_series_printer.before_paginated_batch(api_url)
-        channels_list = App.fetch_paginated(
+        Cli.adaptive_request_manager.reinit()
+        Cli.request_series_printer.reinit()
+        Cli.request_series_printer.before_paginated_batch(api_url)
+        channels_list = Cli.fetch_paginated(
             api_url,
             params,
             combine_key="channels",
-            response_url=response_url
         )
-        App.request_series_printer.after_paginated_batch()
-        App.logger.info(f'Channel list fetch successful: {len(channels_list):d} channels')
-        App.save(channels_list, "channels")
+        Cli.request_series_printer.after_paginated_batch()
+        Cli.logger.info(f'Channel list fetch successful: {len(channels_list):d} channels')
+        Cli.save(channels_list, "channels")
 
         return channels_list
 
     @staticmethod
-    def fetch_channel_history(channel_id, response_url=None, oldest=None, latest=None):
-        App.logger.info(f'Channel history fetching starts ({channel_id})...')
+    def fetch_channel_history(channel_id, oldest=None, latest=None):
+        Cli.logger.info(f'Channel history fetching starts ({channel_id})...')
         params = {
             # "token": os.environ["SLACK_USER_TOKEN"],
             "channel": channel_id,
@@ -137,68 +136,66 @@ class App:
         if latest is not None:
             params["latest"] = latest
 
-        App.adaptive_request_manager.reinit()
-        App.request_series_printer.reinit()
-        App.request_series_printer.before_paginated_batch(api_url)
-        result_list = App.fetch_paginated(
+        Cli.adaptive_request_manager.reinit()
+        Cli.request_series_printer.reinit()
+        Cli.request_series_printer.before_paginated_batch(api_url)
+        result_list = Cli.fetch_paginated(
             api_url,
             params,
             combine_key="messages",
-            response_url=response_url,
         )
-        App.request_series_printer.after_paginated_batch()
-        App.logger.info(f'Channel history fetch successful ({channel_id}): {len(result_list):d} results')
+        Cli.request_series_printer.after_paginated_batch()
+        Cli.logger.info(f'Channel history fetch successful ({channel_id}): {len(result_list):d} results')
         return result_list
 
     # @TODO reads from users.json, writes to users.json and user_list.json. bug? wut
     @staticmethod
-    def fetch_user_list(team_id=None, response_url=None):
-        users_path = App.a.o + "/users.json"
+    def fetch_user_list(team_id=None):
+        users_path = Cli.a.o + "/users.json"
         if os.path.exists(users_path) is True:  # @FIXME load_from_cache() ?
             with open(users_path, mode="r") as f:
                 cached = json.load(f)
-                App.logger.info(f'User list loaded from cache: {len(cached):d} users')
+                Cli.logger.info(f'User list loaded from cache: {len(cached):d} users')
                 return cached
 
-        App.logger.info('User list fetching starts...')
-        api_url = "https://slack.com/api/users.list",
+        Cli.logger.info('User list fetching starts...')
+        api_url = "https://slack.com/api/users.list"
         params = {
             # "token": os.environ["SLACK_USER_TOKEN"],
             "limit": 1000,
             "team_id": team_id,
         }
-        App.request_series_printer.reinit()
-        App.adaptive_request_manager.reinit()
-        App.request_series_printer.before_paginated_batch(api_url)
-        users = App.fetch_paginated(
+        Cli.request_series_printer.reinit()
+        Cli.adaptive_request_manager.reinit()
+        Cli.request_series_printer.before_paginated_batch(api_url)
+        users = Cli.fetch_paginated(
             api_url,
             params,
             combine_key="members",
-            response_url=response_url,
         )
-        App.request_series_printer.after_paginated_batch()
+        Cli.request_series_printer.after_paginated_batch()
 
-        App.logger.info(f'User list fetch successful: {len(users):d} users')
-        App.save(users, "users")
+        Cli.logger.info(f'User list fetch successful: {len(users):d} users')
+        Cli.save(users, "users")
 
         return users
 
     @staticmethod
-    def fetch_channel_replies(timestamps, channel_id, response_url=None):
+    def fetch_channel_replies(timestamps, channel_id):
         requests_estimated = len(timestamps)
         if requests_estimated == 0:
-            App.logger.info(f'No timestamps - no replies. Skipping ({channel_id})')
+            Cli.logger.info(f'No timestamps - no replies. Skipping ({channel_id})')
             return []
 
-        App.logger.info(f'Channel replies fetching starts ({channel_id})...')
-        App.logger.info(f'Request amount (estimated): {requests_estimated:d}')
-        App.request_series_printer.reinit(requests_estimated)
-        App.adaptive_request_manager.reinit()
+        Cli.logger.info(f'Channel replies fetching starts ({channel_id})...')
+        Cli.logger.info(f'Request amount (estimated): {requests_estimated:d}')
+        Cli.request_series_printer.reinit(requests_estimated)
+        Cli.adaptive_request_manager.reinit()
 
         replies = []
         api_url = "https://slack.com/api/conversations.replies"
 
-        App.request_series_printer.before_paginated_batch(api_url)
+        Cli.request_series_printer.before_paginated_batch(api_url)
         for timestamp in timestamps:
             params = {
                 # "token": os.environ["SLACK_USER_TOKEN"],
@@ -206,16 +203,15 @@ class App:
                 "ts": timestamp,
                 "limit": 1000,
             }
-            result = App.fetch_paginated(
+            result = Cli.fetch_paginated(
                 api_url,
                 params,
                 combine_key="messages",
-                response_url=response_url,
             )
             replies.append(result)
 
-        App.request_series_printer.after_paginated_batch()
-        App.logger.info(f'Channel replies fetch successful ({channel_id}): {len(replies):d} results')
+        Cli.request_series_printer.after_paginated_batch()
+        Cli.logger.info(f'Channel replies fetch successful ({channel_id}): {len(replies):d} results')
         return replies
 
     @staticmethod
@@ -236,9 +232,9 @@ class App:
             else:
                 ch_type = "channel"
             if "creator" in channel:
-                ch_ownership = "created by %s" % App.name_from_uid(channel["creator"], users)
+                ch_ownership = "created by %s" % Cli.name_from_uid(channel["creator"], users)
             elif "user" in channel:
-                ch_ownership = "with %s" % App.name_from_uid(channel["user"], users)
+                ch_ownership = "with %s" % Cli.name_from_uid(channel["user"], users)
             else:
                 ch_ownership = ""
             ch_name = " %s:" % ch_name if ch_name.strip() != "" else ch_name
@@ -338,8 +334,8 @@ class App:
         for msg in messages:
             if "user" in msg:
                 usr = {
-                    "name": App.name_from_uid(msg["user"], users),
-                    "real_name": App.name_from_uid(msg["user"], users, real=True),
+                    "name": Cli.name_from_uid(msg["user"], users),
+                    "real_name": Cli.name_from_uid(msg["user"], users, real=True),
                 }
             else:
                 usr = {"name": "", "real_name": "none"}
@@ -350,7 +346,7 @@ class App:
             text = msg["text"] if msg["text"].strip() != "" else "[no message content]"
             for u in [x["id"] for x in users]:  # it takes BILLIONS to iterate user list with 50k users. refactoring required
                 text = str(text).replace(
-                    "<@%s>" % u, "<@%s> (%s)" % (u, App.name_from_uid(u, users))
+                    "<@%s>" % u, "<@%s> (%s)" % (u, Cli.name_from_uid(u, users))
                 )
 
             entry = "Message at %s\nUser: %s (%s)\n%s" % (
@@ -363,7 +359,7 @@ class App:
                 rxns = msg["reactions"]
                 entry += "\nReactions: " + ", ".join(
                     "%s (%s)"
-                    % (x["name"], ", ".join(App.name_from_uid(u, users) for u in x["users"]))
+                    % (x["name"], ", ".join(Cli.name_from_uid(u, users) for u in x["users"]))
                     for x in rxns
                 )
             if "files" in msg:
@@ -397,7 +393,7 @@ class App:
     def parse_replies(threads, users):
         body = ""
         for thread in threads:
-            body += App.parse_channel_history(thread, users, check_thread=True)
+            body += Cli.parse_channel_history(thread, users, check_thread=True)
             body += "\n"
 
         return body
@@ -419,6 +415,11 @@ class App:
     request_series_printer: RequestSeriesPrinter = RequestSeriesPrinter.get_instance()
     adaptive_request_manager: AdaptiveRequestManager = AdaptiveRequestManager.get_instance()
 
+    a: Namespace
+    ch_list: List
+    ts: str
+    sep_str: str
+
     def __init__(self):
         env_file = os.path.join(os.path.dirname(__file__), ".env")
         if os.path.isfile(env_file):
@@ -434,35 +435,34 @@ class App:
 
     def _invoke(self):
         try:
-            App.HEADERS = {"Authorization": "Bearer %s" % os.environ["SLACK_USER_2TOKEN"]}
+            Cli.HEADERS = {"Authorization": "Bearer %s" % os.environ["SLACK_USER_TOKEN"]}
         except KeyError:
             raise RuntimeError('Missing SLACK_USER_TOKEN in environment variables')
 
-        App.a = App.parse_args()
+        Cli.a = Cli.parse_args()
 
-        ts = str(datetime.strftime(datetime.now(), "%m-%d-%Y_%H%M%S"))
-        sep_str = "*" * 24
+        Cli.ts = str(datetime.strftime(datetime.now(), "%m-%d-%Y_%H%M%S"))
+        Cli.sep_str = "*" * 24
 
-        App.adaptive_request_manager.apply_app_args(App.a)
+        Cli.adaptive_request_manager.apply_app_args(Cli.a)
 
         # ----------------------------------------------------------------------
 
-        ch_list = App.fetch_channel_list()
-        ch_map_id = {v.get('id'): v for v in ch_list}  # @TODO optimize find-by-id methods
+        Cli.ch_list = Cli.fetch_channel_list()
+        ch_map_id = {v.get('id'): v for v in Cli.ch_list}  # @TODO optimize find-by-id methods
 
-        if App.a.lc:
-            user_list = App.fetch_user_list()
-            data = ch_list if App.a.json else App.parse_channel_list(ch_list, user_list)
-            App.save(data, "channel_list")
-        if App.a.lu:
-            user_list = App.fetch_user_list()
-            data = user_list if App.a.json else App.parse_user_list(user_list)
-            App.save(data, "user_list")
-        if App.a.c:
-            user_list = App.fetch_user_list()
-            ch = App.a.ch
+        if Cli.a.lc:
+            user_list = Cli.fetch_user_list()
+            data = Cli.ch_list if Cli.a.json else Cli.parse_channel_list(Cli.ch_list, user_list)
+            Cli.save(data, "channel_list")
+        if Cli.a.lu:
+            user_list = Cli.fetch_user_list()
+            data = user_list if Cli.a.json else Cli.parse_user_list(user_list)
+            Cli.save(data, "user_list")
+        if Cli.a.c:
+            user_list = Cli.fetch_user_list()
+            ch = Cli.a.ch
             if ch:
-                ch_names = [ch]
                 if ch.endswith('.json'):
                     with open(ch, mode="r") as f:
                         ch_names = json.load(f)
@@ -470,29 +470,29 @@ class App:
                     ch_names = ch.split(',')
                 ch_names = [ch.lstrip('#') for ch in ch_names]
                 for ch_name in ch_names:
-                    ch_id = App.id_from_ch_name(ch_name, ch_list)
+                    Cli.ch_id = Cli.id_from_ch_name(ch_name, Cli.ch_list)
                     # what if it WAS an id from the beginning?
-                    if not ch_id:
+                    if not Cli.ch_id:
                         if ch_name in ch_map_id.keys():
-                            ch_id = ch_name
-                    if ch_id:
-                        ch_save_path = App.get_channel_save_path(ch_id, ch_list)
-                        ch_hist = App.load_from_cache(ch_save_path)
+                            Cli.ch_id = ch_name
+                    if Cli.ch_id:
+                        ch_save_path = Cli.get_channel_save_path(Cli.ch_id, Cli.ch_list)
+                        ch_hist = Cli.load_from_cache(ch_save_path)
                         if ch_hist is None:
-                            ch_hist = App.fetch_channel_history(ch_id, oldest=App.a.fr, latest=App.a.to)
-                        App.save_channel_history(ch_hist, ch_id, ch_list, user_list)
+                            ch_hist = Cli.fetch_channel_history(Cli.ch_id, oldest=Cli.a.fr, latest=Cli.a.to)
+                        Cli.save_channel_history(ch_hist, Cli.ch_id, Cli.ch_list, user_list)
                     else:
-                        App.logger.warn(f"Channel ID not found for name '{ch_name}', skipping")
+                        Cli.logger.warn(f"Channel ID not found for name '{ch_name}', skipping")
             else:
-                for ch_id in [x["id"] for x in ch_list]:
-                    ch_hist = App.fetch_channel_history(ch_id, oldest=App.a.fr, latest=App.a.to)
-                    App.save_channel_history(ch_hist, ch_id, ch_list, user_list)
+                for ch_id in [x["id"] for x in Cli.ch_list]:
+                    ch_hist = Cli.fetch_channel_history(ch_id, oldest=Cli.a.fr, latest=Cli.a.to)
+                    Cli.save_channel_history(ch_hist, ch_id, Cli.ch_list, user_list)
         # elif, since we want to avoid asking for channel_history twice
-        elif App.a.r:
-            user_list = App.fetch_user_list()
-            for ch_id in [x["id"] for x in App.fetch_channel_list()]:
-                ch_hist = App.fetch_channel_history(ch_id, oldest=App.a.fr, latest=App.a.to)
-                App.save_channel_replies(ch_hist, ch_id, ch_list, user_list)
+        elif Cli.a.r:
+            user_list = Cli.fetch_user_list()
+            for ch_id in [x["id"] for x in Cli.fetch_channel_list()]:
+                ch_hist = Cli.fetch_channel_history(ch_id, oldest=Cli.a.fr, latest=Cli.a.to)
+                Cli.save_channel_replies(ch_hist, ch_id, Cli.ch_list, user_list)
 
     @staticmethod
     def parse_args():
@@ -567,56 +567,56 @@ class App:
     @staticmethod
     def get_output_dir_path():
         return os.path.abspath(
-            os.path.expanduser(os.path.expandvars(App.a.o))
+            os.path.expanduser(os.path.expandvars(Cli.a.o))
         )
 
     @staticmethod
     def save(data, filename):
-        if App.a.o is None:
+        if Cli.a.o is None:
             json.dump(print(data), sys.stdout, indent=4)
         else:
-            out_dir = App.get_output_dir_path()
-            filename = filename + ".json" if App.a.json else filename + ".txt"
+            out_dir = Cli.get_output_dir_path()
+            filename = filename + ".json" if Cli.a.json else filename + ".txt"
             full_filepath = os.path.join(out_dir, filename)
 
             os.makedirs(os.path.dirname(full_filepath), exist_ok=True)
 
-            App.logger.info(f'Writing to {full_filepath}... ')
-            if App.a.json:
+            Cli.logger.info(f'Writing to {full_filepath}... ')
+            if Cli.a.json:
                 data = json.dumps(data, indent=4, ensure_ascii=False)
             with open(full_filepath, mode="w", encoding="utf-8") as f:
                 f.write(data)
 
-            App.logger.info(f'Writing done ({fmt_sizeof(len(data)).strip()})')
+            Cli.logger.info(f'Writing done ({fmt_sizeof(len(data)).strip()})')
 
     @staticmethod
     def load_from_cache(filename) -> List|None:
         # if file is found: read it and return list
         # if file is not found: return None
-        full_filepath = os.path.join(App.get_output_dir_path(), filename + ".json")
+        full_filepath = os.path.join(Cli.get_output_dir_path(), filename + ".json")
         if os.path.exists(full_filepath):
             with open(full_filepath, mode="r", encoding="utf-8") as f:
                 return json.load(f)
         else:
-            App.logger.debug(f"Cache miss: {filename}")
+            Cli.logger.debug(f"Cache miss: {filename}")
             return None
 
     @staticmethod
     def get_channel_replies_save_path(ch_id, ch_list):
-        return "%s--replies" % App.get_channel_save_path(ch_id, ch_list)
+        return "%s--replies" % Cli.get_channel_save_path(ch_id, ch_list)
 
     @staticmethod
     def save_channel_replies(channel_hist, channel_id, channel_list, users):
-        replies_save_path = App.get_channel_replies_save_path(App.ch_id, App.ch_list)
+        replies_save_path = Cli.get_channel_replies_save_path(channel_id, channel_list)
 
-        if App.load_from_cache(replies_save_path) is not None:  # can be empty list
-            App.logger.info(f"Found in cache, skipping: {replies_save_path}")
+        if Cli.load_from_cache(replies_save_path) is not None:  # can be empty list
+            Cli.logger.info(f"Found in cache, skipping: {replies_save_path}")
             return
 
         reply_timestamps = [x["ts"] for x in channel_hist if "reply_count" in x]
-        ch_replies = App.fetch_channel_replies(reply_timestamps, channel_id)
-        ch_name, ch_type = App.name_from_ch_id(channel_id, channel_list)
-        if App.a.json:
+        ch_replies = Cli.fetch_channel_replies(reply_timestamps, channel_id)
+        ch_name, ch_type = Cli.name_from_ch_id(channel_id, channel_list)
+        if Cli.a.json:
             data_replies = ch_replies
         else:
             header_str = "Threads in %s: %s\n%s Messages" % (
@@ -624,56 +624,56 @@ class App:
                 ch_name,
                 len(ch_replies),
             )
-            data_replies = App.parse_replies(ch_replies, users)
-            data_replies = "%s\n%s\n\n%s" % (header_str, App.sep_str, data_replies)
-        App.save(data_replies, replies_save_path)
+            data_replies = Cli.parse_replies(ch_replies, users)
+            data_replies = "%s\n%s\n\n%s" % (header_str, Cli.sep_str, data_replies)
+        Cli.save(data_replies, replies_save_path)
 
     @staticmethod
     def get_channel_save_path(ch_id, ch_list):
-        ch_name, ch_type = App.name_from_ch_id(ch_id, ch_list)
+        ch_name, ch_type = Cli.name_from_ch_id(ch_id, ch_list)
         return "%s/%s" % (ch_name, ch_name)
 
     @staticmethod
     def save_channel_history(channel_hist, channel_id, channel_list, users):
-        channel_save_path = App.get_channel_save_path(channel_id, channel_list)
-        if App.load_from_cache(channel_save_path) is None:
-            ch_name, ch_type = App.name_from_ch_id(channel_id, channel_list)
-            if App.a.json:
+        channel_save_path = Cli.get_channel_save_path(channel_id, channel_list)
+        if Cli.load_from_cache(channel_save_path) is None:
+            ch_name, ch_type = Cli.name_from_ch_id(channel_id, channel_list)
+            if Cli.a.json:
                 data_ch = channel_hist
             else:
-                data_ch = App.parse_channel_history(channel_hist, users)
+                data_ch = Cli.parse_channel_history(channel_hist, users)
                 header_str = "%s Name: %s" % (ch_type, ch_name)
                 data_ch = (
                         "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
-                        % (channel_id, header_str, len(channel_hist), App.sep_str)
+                        % (channel_id, header_str, len(channel_hist), Cli.sep_str)
                         + data_ch
                 )
-            App.save(data_ch, channel_save_path)
+            Cli.save(data_ch, channel_save_path)
         else:
-            App.logger.info(f"Found in cache, skipping: {channel_save_path}")
+            Cli.logger.info(f"Found in cache, skipping: {channel_save_path}")
 
-        if App.a.r:
-            App.save_channel_replies(channel_hist, channel_id, channel_list, users)
+        if Cli.a.r:
+            Cli.save_channel_replies(channel_hist, channel_id, channel_list, users)
 
 
 # noinspection PyMethodMayBeStatic
 class ExceptionHandler:
     def handle(self, e: Exception):
         self._write(e)
-        #self._write_with_trace(e)
+        # self._write_with_trace(e)
         print()
         exit(1)
 
     def _write(self, e: Exception):
-        App.logger.error(str(e))
+        Cli.logger.error(str(e))
 
     def _write_with_trace(self, e: Exception):
         tb_splitted = traceback.format_exception(e.__class__, e, e.__traceback__)
         tb_lines = [line.rstrip('\n') for line in tb_splitted]
 
-        App.logger.error(json.dumps(tb_splitted, ensure_ascii=False), silent=True)
+        Cli.logger.error(json.dumps(tb_splitted, ensure_ascii=False), silent=True)
         print("\n".join(tb_lines), file=sys.stderr)
 
 
 if __name__ == "__main__":
-    App().run()
+    Cli().run()

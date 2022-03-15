@@ -25,6 +25,7 @@ class Logger:
         return cls._instance
 
     def __init__(self):
+        self.id = hash(self)
         super().__init__()
         self._buf = ''
         self._fileio: Optional[FileIO] = None
@@ -40,9 +41,7 @@ class Logger:
 
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         print(f'[{ts}] {level.upper()}: {self._buf + text}',
-              file=self._fileio,
-              end='\n',
-              flush=True)
+              file=self._fileio, end='\n', flush=True)
         self._buf = ''
 
     def debug(self, text: str, silent: bool = True):

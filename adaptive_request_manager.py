@@ -36,7 +36,7 @@ class AdaptiveRequestManager(AbstractSingleton):
     def __init__(self, _key=None):
         super().__init__(_key)
         self.request_series_printer = RequestSeriesPrinter.get_instance()
-        self.logger = Logger()
+        self.logger = Logger().get_instance()
 
         self._post_req_delay: float = 0
         self._successive_req_num: int

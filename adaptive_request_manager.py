@@ -74,8 +74,8 @@ class AdaptiveRequestManager(AbstractSingleton):
             try:
                 response: Response = request_fn()
             except Exception as e:
-                self.on_request_failure(attempt_num, 'No response')
-                self.logger.error(f'Attempt {attempt_num:d} failed. {e!s}', silent=False)
+                self.on_request_failure(attempt_num, f'{e!s}')
+                self.logger.error(f'{e!s}', silent=True)
                 continue
 
             self.on_request_completion(response)

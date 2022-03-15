@@ -67,7 +67,7 @@ class Cli:
         next_cursor = None
         result = []
         while True:
-            Cli.request_series_printer.before_request(params)
+            Cli.request_series_printer.before_request()
             next_cursor, data = Cli.fetch_at_cursor(
                 url, params, cursor=next_cursor,
             )

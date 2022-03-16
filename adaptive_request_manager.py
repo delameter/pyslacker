@@ -11,12 +11,12 @@ from typing import List, Callable, Tuple
 
 from requests import Response
 
-from abstract_singleton import AbstractSingleton
 from logger import Logger
 from request_series_printer import RequestSeriesPrinter
+from singleton import Singleton
 
 
-class AdaptiveRequestManager(AbstractSingleton):
+class AdaptiveRequestManager(metaclass=Singleton):
     RETRY_MAX_NUM = 20
     SAMPLES_MAX_LEN = 60
     OPTIMIZING_THRESHOLD_MIN = 1.5  # starts to decrease delay after THRESHOLD minutes without rate limit errors
@@ -29,12 +29,7 @@ class AdaptiveRequestManager(AbstractSingleton):
     DELAY_TRANSPORT_FAILURE_SEC = [0.5] + [pow(1.2, i) + 10 * x for i, x in enumerate(range(0, RETRY_MAX_NUM))]
     DELAY_TRANSPORT_FAILURE_STATIC_SEC = 30  # if disabled via arguments
 
-    @classmethod
-    def _construct(cls) -> AdaptiveRequestManager:
-        return AdaptiveRequestManager(cls._create_key)
-
-    def __init__(self, _key=None):
-        super().__init__(_key)
+    def __init__(self):
         self.request_series_printer = RequestSeriesPrinter.get_instance()
         self.logger = Logger.get_instance()
 
@@ -46,6 +41,7 @@ class AdaptiveRequestManager(AbstractSingleton):
 
         self._delay_adjustment_enabled = True
         self._rpm_max: float|None = None  # None = disabled
+
         self.reinit()
 
     def reinit(self):
@@ -72,7 +68,7 @@ class AdaptiveRequestManager(AbstractSingleton):
             attempt_num += 1
             self.request_series_printer.before_request_attempt(attempt_num)
             try:
-                (response, content_size) = request_fn(attempt_num)  # @выпилить str
+                (response, content_size) = request_fn(attempt_num)
             except Exception as e:
                 self.on_request_failure(attempt_num, f'{e!s}')
                 self.logger.error(f'{e!s}', silent=True)

@@ -5,28 +5,47 @@
 from __future__ import annotations
 
 import re
-from math import trunc
-from typing import Deque
+from math import trunc, isclose
+from typing import Deque, AnyStr, Type, Union, TypeVar, ClassVar
 
-from abstract_singleton import AbstractSingleton
+from logger import Logger
 from sgr import SGRRegistry, SGRSequence
+from singleton import Singleton
 from util.io import fmt_sizeof, fmt_time_delta, AutoFloat, BackgroundProgressBar, get_terminal_width
 
 
+
+class RenderInstruction:
+    def __init__(self, msg: str, duration_sec: float = 3):
+        self._msg: str = msg
+        self._duration_sec: float = max(0.0, duration_sec)
+
+    def iterate(self, render_duration: float) -> bool:
+        self._duration_sec -= render_duration
+        return self.visible
+
+    @property
+    def visible(self) -> bool:
+        return not isclose(.0, self._duration_sec)
+
+    @property
+    def msg(self) -> str:
+        return self._msg
+
+
+Renderab = TypeVar('Renderab', str, RenderInstruction)
+
+
+
 # noinspection PyAttributeOutsideInit
-class RequestSeriesPrinter(AbstractSingleton):
+class RequestSeriesPrinter(metaclass=Singleton):
     REQUEST_DELTA_MAX_LEN = 40
     INDENT = 3 * ' '
     PROGRESS_BAR_SIZE = 5
     MARKER_TTL = 3
     EVENT_TTL = 3
 
-    @classmethod
-    def _construct(cls) -> RequestSeriesPrinter:
-        return RequestSeriesPrinter(cls._create_key)
-
-    def __init__(self, _key=None):
-        super().__init__(_key)
+    def __init__(self):
         self._progress_bar = BackgroundProgressBar(
             highlight_open_seq=SGRSequence(34, 1),
             regular_open_seq=SGRSequence(),
@@ -35,6 +54,8 @@ class RequestSeriesPrinter(AbstractSingleton):
 
     def reinit(self, requests_estimated: int = 0):
         self._current_line_cache = ''
+        self._prev_render_start_time = ''
+
         self._requests_estimated = requests_estimated
         self._requests_successful = 0
         self._request_num = 0
@@ -42,39 +63,65 @@ class RequestSeriesPrinter(AbstractSingleton):
         self._request_url: str | None = None
         self._response_size_sum: int = 0
         self._render_phase: int = 0
-        self._event_msg_queue: Deque[str] = Deque[str]()
+        self._event_msg_queue: Deque[Renderab] = Deque[Renderab]()
 
         self._request_progress_perc: float | None = None
         self._rpm_cached: float | None = None
         self._minutes_left: int | None = None
-        self._rpm_marker_queue: Deque[str] = Deque[str]()
+        self._rpm_marker_queue: Deque[Renderab] = Deque[Renderab]()
 
         self._cursor_x: int = 0
         self._cursor_y_estim: int = 0
+        self._terminal_width: int = 0
 
         self._progress_bar.reset()
         self._progress_bar.update(source_str='', indicator_size=5, indent_size=0)
+        self._update_terminal_width()
 
     def update_statistics(self, response_ok: bool, size_b: int, rpm: float | None):
+        stats_log_msg = []
+
         if response_ok:
             self._response_size_sum += size_b
             self._requests_successful += 1
+            stats_log_msg.append(f'size total: {self._response_size_sum}')
 
         if rpm is not None and rpm > 0:
             self._rpm_cached = rpm
+            stats_log_msg.append(f'rpm: {self._rpm_cached:.3f}')
 
         if self._requests_estimated:
             self._request_progress_perc = 100.0 * min(1.0, self._requests_successful / self._requests_estimated)
+            stats_log_msg.append(f'progress: {self._request_progress_perc:.3}')
+
             if self._rpm_cached:
                 self._minutes_left = (self._requests_estimated - self._requests_successful) / self._rpm_cached
+                stats_log_msg.append(f'min left: {self._minutes_left:.3}')
+
+        if stats_log_msg:
+            Logger.get_instance().debug('; '.join(stats_log_msg), silent=True)
+
+    @property
+    def _progress_available(self) -> bool:
+        return self._request_progress_perc is not None and self._request_progress_perc > 0
+
+    @property
+    def _eta_available(self) -> bool:
+        return self._minutes_left is not None
+
+    @property
+    def _rpm_available(self) -> bool:
+        return self._rpm_cached is not None and self._rpm_cached > 0
 
     # -----------------------------------------------------------------------------
     # event hanlders
 
     def before_paginated_batch(self, url: str):
         self._request_url = url
-        self._print(f"Data provider: {SGRRegistry.FMT_BLUE}{self._request_url}{SGRRegistry.FMT_RESET}")
+        data_provider_str = f"Data provider: {SGRRegistry.FMT_BLUE}{self._request_url}{SGRRegistry.FMT_RESET}"
+        self._print(data_provider_str)
         self._persist_line()
+        self.print_separator()
 
     def after_paginated_batch(self):
         self._persist_line()
@@ -95,7 +142,7 @@ class RequestSeriesPrinter(AbstractSingleton):
     def on_request_completion(self, request_ok: bool, status_code: str):
         self._reset_line()
         if not request_ok:
-            self._print(f'Request #{self._request_num} resulted in HTTP Code {status_code}')
+            self._print(f'Request #{self._request_num} resulted in HTTP code {status_code}')
             self._persist_line()
         self._render(request_ok, status_code)
         self._render_phase = 2
@@ -105,14 +152,16 @@ class RequestSeriesPrinter(AbstractSingleton):
 
     def sleep_iterator(self, seconds_left: float):
         # get last line from cache (the one that is currently visible),
-        # find indicator placeholder and overwrite current line:
-        self._print('\r' + re.sub(
+        # replace indicator placeholder and overwrite current line:
+        current_line_waiting = re.sub(
             r'^(.+?#\d+\S*\s*[@R](?:\033\[[0-9;]*m)?\s*)(@)',
             lambda m: f'{m.group(1)}{SGRSequence(36, 1)}W{SGRRegistry.FMT_RESET}'
-                      if trunc(seconds_left) % 2 == 0
-                      else f'{m.group(1)} ',
-            self._current_line_cache), cache=False)
-        pass
+                if trunc(seconds_left) % 2 == 0
+                else f'{m.group(1)} ',
+            self._current_line_cache)
+
+        self._print('\r' + current_line_waiting, cache=False)
+        Logger.get_instance().debug(current_line_waiting, silent=True)
 
     def after_sleeping(self):
         self._current_line_cache = ''
@@ -128,15 +177,25 @@ class RequestSeriesPrinter(AbstractSingleton):
             fmt = SGRRegistry.FMT_GREEN
             marker = '^'
 
-        self._rpm_marker_queue.extendleft([f'{fmt!s}' +
-                                           f'{SGRRegistry.FMT_BOLD!s}' +
-                                           f'{marker}' +
-                                           f'{SGRSequence(22)!s}'] * self.MARKER_TTL)
+        self._rpm_marker_queue.extendleft('sa')
+        self._rpm_marker_queue.extendleft(RenderInstruction())
+
+
+        self._rpm_marker_queue.extendleft(RenderInstruction(f'{fmt!s}' +
+                                                            f'{SGRRegistry.FMT_BOLD!s}' +
+                                                            f'{marker}' +
+                                                            f'{SGRSequence(22)!s}', self.MARKER_TTL))
 
     # @ TODO solve "waiting" problem - pre-render / priority
     def print_event(self, event_msg: str, once: bool = False):
         event_msgs = [event_msg] * (1 if once else self.EVENT_TTL)
         self._event_msg_queue.extendleft(event_msgs)
+
+    # @ TODO check how to determine if terminal doesn't support selected char and use fallbacks
+    def print_separator(self):
+        self._update_terminal_width()
+        self._print('─' * self._terminal_width)
+        self._persist_line()
 
     # -----------------------------------------------------------------------------
 
@@ -151,10 +210,13 @@ class RequestSeriesPrinter(AbstractSingleton):
         self._render_rpm()
         self._render_size()
 
+        # @TODO hide text cursor (@halo)
         if len(self._event_msg_queue):
             self._print(f'{SGRSequence(37)}'
                         f'{self._event_msg_queue.popleft()}'
                         f'{SGRRegistry.FMT_RESET}{self.INDENT}')
+
+        Logger.get_instance().debug(self._current_line_cache, silent=True)
 
     # -----------------------------------------------------------------------------
     # render phase 0
@@ -264,33 +326,28 @@ class RequestSeriesPrinter(AbstractSingleton):
 
     def _persist_line(self):
         print('\n', end='')
+
         self._current_line_cache = ''
         self._cursor_x = 0
         self._cursor_y_estim += 1
         self._render_phase = 0
 
     def _reset_line(self):
-        print('\r' + ' ' * get_terminal_width(), end='')
+        self._update_terminal_width()
+        print('\r' + ' ' * self._terminal_width, end='')
         print('\r', end='')
+
         self._current_line_cache = ''
         self._cursor_x = 0
         self._cursor_y_estim += 1
         self._render_phase = 0
 
-    @property
-    def _progress_available(self) -> bool:
-        return self._request_progress_perc is not None and self._request_progress_perc > 0
-
-    @property
-    def _eta_available(self) -> bool:
-        return self._minutes_left is not None
-
-    @property
-    def _rpm_available(self) -> bool:
-        return self._rpm_cached is not None and self._rpm_cached > 0
+    # @ TODO can be optimized - by listening for resize events (signals?)
+    def _update_terminal_width(self):
+        self._terminal_width = get_terminal_width()
 
 
-# @ WIP
+# @TODO WIP
 class ResponseResult:
     def __init__(self, ok: bool, status: str, fmt: str):
         self._ok: bool = ok

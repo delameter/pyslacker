@@ -35,7 +35,7 @@ class Cli:
     @staticmethod
     def send_get_request(url, params) -> Tuple[Response, int]:
         response = requests.get(url, headers=Cli.HEADERS, params=params, timeout=(10, 30))
-        return response, len(response.json())
+        return response, len(response.content)
 
     @staticmethod
     def fetch_at_cursor(url, params, cursor=None):

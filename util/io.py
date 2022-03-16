@@ -3,10 +3,10 @@
 # 2022 A. Shavykin <0.delameter@gmail.com>
 # -----------------------------------------------------------------------------
 import re
-from math import trunc
+from math import trunc, isclose
 
 from math import floor
-from typing import List
+from typing import List, TypeVar
 
 from sgr import SGRSequence, SGRRegistry
 
@@ -183,3 +183,4 @@ class BackgroundProgressBar:
 
     def __str__(self):
         return self._source_str
+

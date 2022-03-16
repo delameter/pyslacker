@@ -31,6 +31,7 @@ class SGRRegistry:
     FMT_GREEN = SGRSequence(32)
     FMT_YELLOW = SGRSequence(33)
     FMT_BLUE = SGRSequence(34)
+    FMT_CYAN = SGRSequence(36)
     FMT_HI_YELLOW = SGRSequence(93)
 
     SGR_REGEX = re.compile(r'\033\[[0-9;]*m')

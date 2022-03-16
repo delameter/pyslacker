@@ -7,23 +7,22 @@
 # -----------------------------------------------------------------------------
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import sys
-import traceback
 from argparse import RawDescriptionHelpFormatter, Namespace
-from typing import List
+from datetime import datetime
+from typing import List, Tuple
 
 import requests
-import json
-from datetime import datetime
-import argparse
 from dotenv import load_dotenv
-
 from requests import Response
 
+from adaptive_request_manager import AdaptiveRequestManager
+from exception_handler import ExceptionHandler
 from logger import Logger
 from request_series_printer import RequestSeriesPrinter
-from adaptive_request_manager import AdaptiveRequestManager
 from util.io import fmt_sizeof
 
 
@@ -34,19 +33,26 @@ class Cli:
         requests.post(url, json={"text": text})
 
     @staticmethod
+    def send_get_request(url, params) -> Tuple[Response, int]:
+        response = requests.get(url, headers=Cli.HEADERS, params=params, timeout=(10, 30))
+        return response, len(response.json())
+
+    @staticmethod
     def fetch_at_cursor(url, params, cursor=None):
         if cursor is not None:
             params["cursor"] = cursor
 
-        response: Response|None = Cli.adaptive_request_manager.perform_retriable_request(
-            lambda: requests.get(url, headers=Cli.HEADERS, params=params, timeout=(10, 30))
-        )
-        if not response:
-            sys.exit(1)
-        d = response.json()
-
         try:
-            if d["ok"] is False:
+            response = Cli.adaptive_request_manager.perform_retriable_request(
+                lambda attempt_num: Cli.send_get_request(url, params)
+            )
+        except RuntimeError as e:
+            Cli.logger.error(str(e))
+            sys.exit(1)
+
+        d = response.json()
+        try:
+            if d['ok'] is False:
                 Cli.logger.error(f'API error encountered: {d!s}' % d)
                 sys.exit(1)
 
@@ -411,7 +417,7 @@ class Cli:
             if channel.get('name', None) == channel_name:
                 return channel['id']
 
-    logger: Logger = Logger.get_instance()
+    logger: Logger = Logger.get_instance(require_new=True)
     request_series_printer: RequestSeriesPrinter = RequestSeriesPrinter.get_instance()
     adaptive_request_manager: AdaptiveRequestManager = AdaptiveRequestManager.get_instance()
 
@@ -586,7 +592,6 @@ class Cli:
                 data = json.dumps(data, indent=4, ensure_ascii=False)
             with open(full_filepath, mode="w", encoding="utf-8") as f:
                 f.write(data)
-
             Cli.logger.info(f'Writing done ({fmt_sizeof(len(data)).strip()})')
 
     @staticmethod
@@ -654,25 +659,6 @@ class Cli:
 
         if Cli.a.r:
             Cli.save_channel_replies(channel_hist, channel_id, channel_list, users)
-
-
-# noinspection PyMethodMayBeStatic
-class ExceptionHandler:
-    def handle(self, e: Exception):
-        self._write(e)
-        # self._write_with_trace(e)
-        print()
-        exit(1)
-
-    def _write(self, e: Exception):
-        Cli.logger.error(str(e))
-
-    def _write_with_trace(self, e: Exception):
-        tb_splitted = traceback.format_exception(e.__class__, e, e.__traceback__)
-        tb_lines = [line.rstrip('\n') for line in tb_splitted]
-
-        Cli.logger.error(json.dumps(tb_splitted, ensure_ascii=False), silent=True)
-        print("\n".join(tb_lines), file=sys.stderr)
 
 
 if __name__ == "__main__":

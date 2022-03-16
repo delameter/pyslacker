@@ -7,7 +7,7 @@ from __future__ import annotations
 from argparse import Namespace
 from math import isclose
 from time import time, sleep
-from typing import List, Callable
+from typing import List, Callable, Tuple
 
 from requests import Response
 
@@ -36,7 +36,7 @@ class AdaptiveRequestManager(AbstractSingleton):
     def __init__(self, _key=None):
         super().__init__(_key)
         self.request_series_printer = RequestSeriesPrinter.get_instance()
-        self.logger = Logger().get_instance()
+        self.logger = Logger.get_instance()
 
         self._post_req_delay: float = 0
         self._successive_req_num: int
@@ -66,42 +66,44 @@ class AdaptiveRequestManager(AbstractSingleton):
             if isclose(0, self._rpm_max, abs_tol=1e-03):
                 self._rpm_max = None
 
-    def perform_retriable_request(self, request_fn: Callable) -> Response|None:
+    def perform_retriable_request(self, request_fn: Callable[[int], Tuple[Response, int]]) -> Response:
         attempt_num = 0
         while attempt_num <= AdaptiveRequestManager.RETRY_MAX_NUM:
             attempt_num += 1
             self.request_series_printer.before_request_attempt(attempt_num)
             try:
-                response: Response = request_fn()
+                (response, content_size) = request_fn(attempt_num)  # @выпилить str
             except Exception as e:
                 self.on_request_failure(attempt_num, f'{e!s}')
                 self.logger.error(f'{e!s}', silent=True)
                 continue
 
-            self.on_request_completion(response)
+            self.on_request_completion(response, content_size)
             if not response.ok and response.status_code == 429:
                 retry_after_sec = float(response.headers["Retry-After"])
                 self.on_rate_limited_request_fail(retry_after_sec)
                 continue
             return response
 
-        self.logger.error('Max retry amount exceeded')
-        return None
+        raise RuntimeError('Max retry amount exceeded')
 
     def on_request_failure(self, attempt_num: int, msg: str):
         self.request_series_printer.on_request_failure(msg)
 
         delay = self._get_progressing_delay_on_failure(attempt_num)
-        self.request_series_printer.before_sleeping(delay, 'transport failure')
+        self.request_series_printer.before_sleeping(delay)
 
         self._successive_req_num = 0
         self._sleep(delay)
         self.request_series_printer.after_sleeping()
 
-    def on_request_completion(self, response: Response):
+    def on_request_completion(self, response: Response, response_size: int):
         # COMPLETED, NOT SUCCEEDED (can be 429, 404 etc)
-        self.request_series_printer.update_statistics(response.ok, len(response.content), self._rpm)
-        self.request_series_printer.on_request_completion(response.status_code, response.ok)
+        response_ok = response.ok
+        status_code = str(response.status_code)
+
+        self.request_series_printer.update_statistics(response_ok, response_size, self._rpm)
+        self.request_series_printer.on_request_completion(response_ok, status_code)
 
         if len(self._samples) >= self.SAMPLES_MAX_LEN:
             self._samples.pop()
@@ -114,7 +116,7 @@ class AdaptiveRequestManager(AbstractSingleton):
     def on_rate_limited_request_fail(self, retry_after_sec: float):
         self._stabilize_flow(retry_after_sec)
 
-        self.request_series_printer.before_sleeping(retry_after_sec, 'rate limited')
+        self.request_series_printer.before_sleeping(retry_after_sec)
         self._sleep(retry_after_sec + self._post_req_delay)
 
     def _stabilize_flow(self, retry_after_sec: float):  # increase the delay
@@ -153,10 +155,8 @@ class AdaptiveRequestManager(AbstractSingleton):
         if delta < 0 and isclose(self.DELAY_POST_MIN_SEC, self._post_req_delay, abs_tol=1e-03):
             return
         self._set_post_req_delay(self._post_req_delay + delta)
-        self.request_series_printer.on_post_request_delay_update(
-            new_value=self._post_req_delay,
-            delta_sign=delta/abs(delta),
-        )
+        self.request_series_printer.on_post_request_delay_update(delta/abs(delta))
+        self.logger.info(f'Set post-request delay to {self._post_req_delay:.2f}s', silent=True)
 
     def _sleep(self, seconds: float):
         while seconds > 1:

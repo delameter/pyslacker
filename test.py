@@ -17,19 +17,22 @@ def _sleep(seconds: float):
         sleep(1)
     sleep(seconds)
 
-for slp in (0, 1):
-    request_series_printer.reinit()
+for slp in (0, .4):
+    request_series_printer.reinit(90)
     request_series_printer.before_paginated_batch(f'est20')
     for req_id in range(0, 100):
-        if  req_id % 20 == 0:
+        if  req_id == 40:
             request_series_printer._requests_estimated = None
-            request_series_printer._print_event('Estimation off')
-        elif req_id % 20 == 10:
+            request_series_printer.print_event('Estimation off')
+        elif req_id == 50:
             request_series_printer._requests_estimated = 90
-            request_series_printer._print_event('Estimation on')
+            request_series_printer.print_event('Estimation on')
 
         request_series_printer.before_request()
-        request_series_printer.before_request_attempt(randint(1, 2))
+        request_series_printer.before_request_attempt(2 if randint(1, 20) == 1 else 1)
+
+        request_series_printer.update_statistics(True, 16484, pow(req_id-8,2)/35 if req_id > 5 else None)
+        request_series_printer.on_request_completion(True, str(randint(200, 209)))
 
         if req_id % 11 == 0:
             try:
@@ -37,18 +40,15 @@ for slp in (0, 1):
             except Exception as e:
                 request_series_printer.on_request_failure(f'{e!s}')
                 logger.error(f'{e!s}', silent=True)
-        else:
-            request_series_printer.update_statistics(True, 0, pow(req_id-8,2)/35 if req_id > 5 else None)
-            request_series_printer.on_request_completion(randint(200, 209), True)
 
         if req_id % 25 == 0:
-            request_series_printer.on_post_request_delay_update(0, delta_sign=copysign(1*(req_id-50), req_id-50))
-            request_series_printer._print_event('Delay updated')
+            request_series_printer.on_post_request_delay_update(copysign(1*(req_id-50), req_id-50))
+            request_series_printer.print_event('Delay updated')
         if req_id % 25 == 1 and slp == 0:
             request_series_printer._persist_line()
 
         if req_id % 40 == 37:
-            request_series_printer.before_sleeping(slp, 'Nap')
+            request_series_printer.before_sleeping(slp)
             _sleep(10*slp)
             request_series_printer.after_sleeping()
         else:
@@ -85,12 +85,12 @@ for batch_idx, max_req in enumerate([100, 2000, 100]):
             #logger.error('PANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANICPANIC')
         elif result < 4:
             request_series_printer.update_statistics(False, 0, rpm)
-            request_series_printer.on_request_completion(randint(400, 509), False)
-            request_series_printer.on_post_request_delay_update(0, delta_sign=randint(-1, 1))
+            request_series_printer.on_request_completion(False, str(randint(400, 509)))
+            request_series_printer.on_post_request_delay_update(randint(-1, 1))
         else:
             size = randint(0, 550)
             request_series_printer.update_statistics(True, size, rpm)
-            request_series_printer.on_request_completion(randint(200, 209), True)
+            request_series_printer.on_request_completion(True, str(randint(200, 209)))
         #request_series_printer._persist_line()
 
     request_series_printer.after_paginated_batch()

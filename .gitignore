@@ -6,3 +6,6 @@ __pycache__
 .DS_Store
 .slack-backup
 log
+channel.json
+emoji.json
+slack.yaml

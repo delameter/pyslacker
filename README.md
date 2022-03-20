@@ -64,7 +64,7 @@ To use the ngrok method:
     | /export-channel | https://`[host_url]`/slack/export-channel | json \| text | /export-channel text |
     | /export-replies | https://`[host_url]`/slack/export-replies | json \| text | /export-replies json |
 
-    To do this, uncomment the `slash-commands` section in `slack.yaml` and replace `YOUR_HOST_URL_HERE` with something like `https://xxxxxxxxxxxx.ngrok.io` (if using ngrok). Then navigate back to `OAuth & Permissions` and click `(Re)install to Workspace` to add these slash commands to the workspace (ensure the OAuth token in your `.env` file is still correct).
+    To do this, clone `slack.dist.yaml` as `slack.yaml`, uncomment the `slash-commands` section in `slack.yaml` and replace `YOUR_HOST_URL_HERE` with something like `https://xxxxxxxxxxxx.ngrok.io` (if using ngrok). Then navigate back to `OAuth & Permissions` and click `(Re)install to Workspace` to add these slash commands to the workspace (ensure the OAuth token in your `.env` file is still correct).
 
 ## Author
 

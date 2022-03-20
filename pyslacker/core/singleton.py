@@ -1,12 +1,12 @@
-# -----------------------------------------------------------------------------
-# simple singleton pattern implementation
 # 2022 A. Shavykin <0.delameter@gmail.com>
-# -----------------------------------------------------------------------------
+# ----------------------------------------
 from __future__ import annotations
+
+from abc import ABCMeta
 from typing import Dict
 
 
-class Singleton(type):
+class Singleton(ABCMeta):
     _instances: Dict[type, Singleton] = {}
 
     def __call__(cls, *args, **kwargs):

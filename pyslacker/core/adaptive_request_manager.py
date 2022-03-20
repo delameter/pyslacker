@@ -7,16 +7,18 @@ from __future__ import annotations
 from argparse import Namespace
 from math import isclose
 from time import time, sleep
-from typing import List, Callable, Tuple
+from typing import Callable, Tuple, cast, Sequence, Deque
 
 from requests import Response
 
-from logger import Logger
-from request_series_printer import RequestSeriesPrinter
-from singleton import Singleton
+from pyslacker.core.logger import Logger
+from pyslacker.core.req_seq_renderer import RequestSequenceRenderer
+from pyslacker.core.request_flow_interface import RequestFlowInterace
+from pyslacker.core.singleton import Singleton
 
 
-class AdaptiveRequestManager(metaclass=Singleton):
+# noinspection PyAttributeOutsideInit
+class AdaptiveRequestManager(RequestFlowInterace, metaclass=Singleton):
     RETRY_MAX_NUM = 20
     SAMPLES_MAX_LEN = 60
     OPTIMIZING_THRESHOLD_MIN = 1.5  # starts to decrease delay after THRESHOLD minutes without rate limit errors
@@ -29,13 +31,20 @@ class AdaptiveRequestManager(metaclass=Singleton):
     DELAY_TRANSPORT_FAILURE_SEC = [0.5] + [pow(1.2, i) + 10 * x for i, x in enumerate(range(0, RETRY_MAX_NUM))]
     DELAY_TRANSPORT_FAILURE_STATIC_SEC = 30  # if disabled via arguments
 
+    @staticmethod
+    def compute_rpm(samples: Sequence[float]) -> float|None:
+        if len(samples) > 5:  # @TODO rolling average?
+            return 60 * len(samples) / (samples[0] - samples[-1])
+        return None
+
     def __init__(self):
-        self.request_series_printer = RequestSeriesPrinter.get_instance()
-        self.logger = Logger.get_instance()
+        self._req_seq_renderer: RequestSequenceRenderer = cast(RequestSequenceRenderer, RequestSequenceRenderer.get_instance())
+        self._logger = Logger.get_instance()
 
         self._post_req_delay: float = 0
+        self._req_num: int
         self._successive_req_num: int
-        self._samples: List[float] = []   # in seconds
+        self._samples: Deque[float] = Deque[float]()   # in seconds
         self._rpm: float
         self._rpm_allowed_to_increase: bool = True
 
@@ -44,7 +53,10 @@ class AdaptiveRequestManager(metaclass=Singleton):
 
         self.reinit()
 
-    def reinit(self):
+    def reinit(self, requests_estimated: int = None):
+        self._req_seq_renderer.reinit(requests_estimated)
+
+        self._req_num = 0
         self._successive_req_num = 0
         self._samples.clear()
         self._rpm = 0.0
@@ -62,16 +74,28 @@ class AdaptiveRequestManager(metaclass=Singleton):
             if isclose(0, self._rpm_max, abs_tol=1e-03):
                 self._rpm_max = None
 
-    def perform_retriable_request(self, request_fn: Callable[[int], Tuple[Response, int]]) -> Response:
+    def before_paginated_batch(self, url: str):
+        self._req_seq_renderer.before_paginated_batch(url)
+
+    def after_paginated_batch(self):
+        self._req_seq_renderer.after_paginated_batch()
+        pass
+
+    def perform_retriable_request(self,
+                                  request_fn: Callable[[int], Tuple[Response, int]],
+                                  completion_fn: Callable[[], str] = None) -> Response:
+        self._req_num += 1
+        self._req_seq_renderer.before_request(self._req_num)
+
         attempt_num = 0
         while attempt_num <= AdaptiveRequestManager.RETRY_MAX_NUM:
             attempt_num += 1
-            self.request_series_printer.before_request_attempt(attempt_num)
+            self._req_seq_renderer.before_request_attempt(attempt_num)
             try:
                 (response, content_size) = request_fn(attempt_num)
             except Exception as e:
                 self.on_request_failure(attempt_num, f'{e!s}')
-                self.logger.error(f'{e!s}', silent=True)
+                self._logger.error('[ReqManager] ' + f'{e!s}', silent=True)
                 continue
 
             self.on_request_completion(response, content_size)
@@ -79,40 +103,42 @@ class AdaptiveRequestManager(metaclass=Singleton):
                 retry_after_sec = float(response.headers["Retry-After"])
                 self.on_rate_limited_request_fail(retry_after_sec)
                 continue
+
+            if completion_fn:
+                self._req_seq_renderer.print_event(completion_fn(), persist=False)
             return response
 
         raise RuntimeError('Max retry amount exceeded')
 
     def on_request_failure(self, attempt_num: int, msg: str):
-        self.request_series_printer.on_request_failure(msg)
+        self._req_seq_renderer.on_request_failure(attempt_num, msg)
 
         delay = self._get_progressing_delay_on_failure(attempt_num)
-        self.request_series_printer.before_sleeping(delay)
+        self._req_seq_renderer.before_sleeping(delay)
 
         self._successive_req_num = 0
         self._sleep(delay)
-        self.request_series_printer.after_sleeping()
+        self._req_seq_renderer.after_sleeping()
 
     def on_request_completion(self, response: Response, response_size: int):
         # COMPLETED, NOT SUCCEEDED (can be 429, 404 etc)
         response_ok = response.ok
         status_code = str(response.status_code)
 
-        self.request_series_printer.update_statistics(response_ok, response_size, self._rpm)
-        self.request_series_printer.on_request_completion(response_ok, status_code)
+        self._req_seq_renderer.update_statistics(response_ok, response_size, self._rpm)
+        self._req_seq_renderer.on_request_completion(response_ok, status_code)
 
         if len(self._samples) >= self.SAMPLES_MAX_LEN:
             self._samples.pop()
-        self._samples.insert(0, time())
-        if len(self._samples) > 5:
-            self._rpm = 60 * len(self._samples) / (self._samples[0] - self._samples[-1])
+        self._samples.appendleft(time())
+        self._rpm = self.compute_rpm(self._samples)
 
         self._optimize_flow()
 
     def on_rate_limited_request_fail(self, retry_after_sec: float):
         self._stabilize_flow(retry_after_sec)
 
-        self.request_series_printer.before_sleeping(retry_after_sec)
+        self._req_seq_renderer.before_sleeping(retry_after_sec)
         self._sleep(retry_after_sec + self._post_req_delay)
 
     def _stabilize_flow(self, retry_after_sec: float):  # increase the delay
@@ -151,12 +177,14 @@ class AdaptiveRequestManager(metaclass=Singleton):
         if delta < 0 and isclose(self.DELAY_POST_MIN_SEC, self._post_req_delay, abs_tol=1e-03):
             return
         self._set_post_req_delay(self._post_req_delay + delta)
-        self.request_series_printer.on_post_request_delay_update(delta/abs(delta))
-        self.logger.info(f'Set post-request delay to {self._post_req_delay:.2f}s', silent=True)
+
+        self._req_seq_renderer.on_post_request_delay_update(int(delta / abs(delta)))
+        self._req_seq_renderer.print_event(f'Set post-request delay to {self._post_req_delay:.2f}s', persist=True)
+        self._logger.info(f'[ReqManager] Set post-request delay to {self._post_req_delay:.2f}s', silent=True)
 
     def _sleep(self, seconds: float):
         while seconds > 1:
-            self.request_series_printer.sleep_iterator(seconds)
+            self._req_seq_renderer.sleep_iterator(seconds)
             seconds -= 1
             sleep(1)
         sleep(seconds)
@@ -164,7 +192,7 @@ class AdaptiveRequestManager(metaclass=Singleton):
     def _apply_rpm_limit(self):
         if not self._rpm:
             return  # not enough data yet
-        #@wip
+        # @TODO
         pass
 
     @property

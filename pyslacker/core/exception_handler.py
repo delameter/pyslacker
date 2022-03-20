@@ -1,3 +1,5 @@
+# 2022 A. Shavykin <0.delameter@gmail.com>
+# ----------------------------------------
 from __future__ import annotations
 
 import json
@@ -6,7 +8,7 @@ import signal
 import sys
 import traceback
 
-from logger import Logger
+from pyslacker.core.logger import Logger
 
 
 # noinspection PyMethodMayBeStatic

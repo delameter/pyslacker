@@ -3,21 +3,65 @@
 # 2022 A. Shavykin <0.delameter@gmail.com>
 # -----------------------------------------------------------------------------
 import re
-from math import trunc, isclose
-
+from dataclasses import dataclass
 from math import floor
-from typing import List, TypeVar
+from math import trunc
+from typing import List
 
-from sgr import SGRSequence, SGRRegistry
+
+@dataclass
+class TimeUnit:
+    name: str
+    in_next: int
+    collapsible: bool = False
+
 
 time_units = [
-    {"name": "sec", "in_next": 60},
-    {"name": "min", "in_next": 60},
-    {"name": "hr", "in_next": 24},
-    {"name": "day", "in_next": 30},
-    {"name": "mon", "in_next": 12},
-    {"name": "yr", "in_next": 0},
+    TimeUnit('sec', 60),
+    TimeUnit('min', 60),
+    TimeUnit('hr', 24, collapsible=True),
+    TimeUnit('day', 30),
+    TimeUnit('mon', 12, collapsible=True),
+    TimeUnit('yr', 0),
 ]
+
+
+class SGRSequence:
+    # SGR ANSI control sequences helper
+    CONTROL_CHARACTER = '\033'
+    INTRODUCER = '['
+    SEPARATOR = ';'
+    TERMINATOR = 'm'
+
+    def __init__(self, *params: int):
+        self.params = list(params)
+
+    def __format__(self, format_spec: str) -> str:
+        return self.__str__()
+
+    def __str__(self):
+        return '{}{}{}{}'.format(self.CONTROL_CHARACTER,
+                                 self.INTRODUCER,
+                                 self.SEPARATOR.join([str(param) for param in self.params]),
+                                 self.TERMINATOR)
+
+
+class SGRRegistry:
+    FMT_RESET = SGRSequence(0)
+    FMT_BOLD = SGRSequence(1)
+    FMT_RED = SGRSequence(31)
+    FMT_GREEN = SGRSequence(32)
+    FMT_YELLOW = SGRSequence(33)
+    FMT_BLUE = SGRSequence(34)
+    FMT_CYAN = SGRSequence(36)
+    FMT_HI_YELLOW = SGRSequence(93)
+
+    SGR_REGEX = re.compile(r'\033\[[0-9;]*m')
+
+    @staticmethod
+    def remove_sgr_seqs(s: str) -> str:
+        # remove all SGR escape sequences, keep the content between
+        return SGRRegistry.SGR_REGEX.sub('', s)
 
 
 def fmt_time_delta(seconds: float) -> str:
@@ -31,14 +75,14 @@ def fmt_time_delta(seconds: float) -> str:
 
     while unit_idx < len(time_units):
         unit = time_units[unit_idx]
-        unit_name = unit["name"]
-        next_unit_ratio = unit["in_next"]
+        unit_name = unit.name
+        next_unit_ratio = unit.in_next
 
         if num < 1:
             return f'<1 {unit_name:3s}'
         elif not next_unit_ratio:
             return f'{seconds:>6.0e}'
-        elif num < 10 and (unit_name == "hr" or unit_name == "mon"):
+        elif num < 10 and unit.collapsible:
             return f'{num:1.0f}{unit_name[0]:1s} {prev_frac:<3s}'
         elif num < next_unit_ratio:
             return f'{num:>2.0f} {unit_name:<3s}'
@@ -121,7 +165,7 @@ class AutoFloat(float):
 
 
 class BackgroundProgressBar:
-    FILL_CHARS: List[str] = [' ', '▏','▎','▍','▌','▋','▊','▉','█']
+    FILL_CHARS: List[str] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█']
     FILLED_0: str = FILL_CHARS[0]
     FILLED_100: str = FILL_CHARS[-1]
 
@@ -183,4 +227,3 @@ class BackgroundProgressBar:
 
     def __str__(self):
         return self._source_str
-

@@ -1,7 +1,5 @@
-# -----------------------------------------------------------------------------
-# simple logger with buffering control
 # 2022 A. Shavykin <0.delameter@gmail.com>
-# -----------------------------------------------------------------------------
+# ----------------------------------------
 from __future__ import annotations
 
 import re
@@ -11,30 +9,32 @@ from datetime import datetime
 from io import FileIO
 from typing import Optional
 
-from sgr import SGRRegistry
+from pyslacker.util.io import SGRRegistry
 
 
 class Logger:
     CR_LF_REGEX = re.compile(r'[\r\n]+')
+    PREFIX = 'PYSLACKER'
 
     _instance: Logger = None
 
     @classmethod
-    def get_instance(cls, require_new: bool = False):
+    def get_instance(cls, require_new: bool = False, *args, **kwargs):
+        if cls._instance and not require_new:
+            return cls._instance
+        instance = cls(*args, **kwargs)
         if not cls._instance:
-            cls._instance = cls()
-        elif require_new:
-            raise RuntimeError('Already instantiated')
-        return cls._instance
+            cls._instance = instance
+        return instance
 
-    def __init__(self):
+    def __init__(self, filename: str|None = None):
         self.id = hash(self)
         super().__init__()
 
         self._buf = ''
         self._fileio: Optional[FileIO] = None
 
-        self._open_io()
+        self._open_io(filename)
         self.debug(f'Created logger instance')
 
     def log(self, text: str, level: str = 'info', buffered: bool = False):
@@ -45,7 +45,7 @@ class Logger:
             print(f'ERROR: Log file pointer is null or file closed: {self._fileio.name if self._fileio else None}')
 
         dt, micro = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rsplit('.', 1)
-        print(f'[{dt}.{micro:.3s}] {level.upper()}: {self._buf + text}',
+        print(f'{dt}.{micro:.3s} {self.PREFIX} {level.upper()}: {self._buf + text}',
               file=self._fileio, end='\n', flush=True)
         self._buf = ''
 
@@ -69,11 +69,11 @@ class Logger:
             print(f'{SGRRegistry.FMT_RED!s}{text}{SGRRegistry.FMT_RESET!s}', file=sys.stderr)
         self.log(text, 'error')
 
-    def _get_current_file_name(self) -> str:
+    def _get_default_filename(self) -> str:
         return time.strftime("./log/log.%Y-%m-%d.log", time.gmtime())
 
-    def _open_io(self):
-        log_filename = self._get_current_file_name()
+    def _open_io(self, filename: str|None):
+        log_filename = filename or self._get_default_filename()
         try:
             self._fileio = open(log_filename, 'a', encoding='utf-8')
         except Exception as e:

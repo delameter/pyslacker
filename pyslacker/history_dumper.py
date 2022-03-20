@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -----------------------------------------------------------------------------
-# Slack message history exporting tool
+# slack message history exporting tool
 # 2022 A. Shavykin <0.delameter@gmail.com>
 # -----------------------------------------------------------------------------
 # based on https://github.com/sebseager/slack-exporter
@@ -19,22 +19,21 @@ import requests
 from dotenv import load_dotenv
 from requests import Response
 
-from adaptive_request_manager import AdaptiveRequestManager
-from exception_handler import ExceptionHandler
-from logger import Logger
-from request_series_printer import RequestSeriesPrinter
-from util.io import fmt_sizeof
+from pyslacker.core.adaptive_request_manager import AdaptiveRequestManager
+from pyslacker.core.exception_handler import ExceptionHandler
+from pyslacker.core.logger import Logger
+from pyslacker.util.io import fmt_sizeof
 
 
 # noinspection PyMethodMayBeStatic
-class Cli:
+class HistoryDumper:
     @staticmethod
     def send_post_request(url, text):
         requests.post(url, json={"text": text})
 
     @staticmethod
     def send_get_request(url, params) -> Tuple[Response, int]:
-        response = requests.get(url, headers=Cli.HEADERS, params=params, timeout=(10, 30))
+        response = requests.get(url, headers=HistoryDumper.HEADERS, params=params, timeout=(10, 30))
         return response, len(response.content)
 
     @staticmethod
@@ -43,17 +42,17 @@ class Cli:
             params["cursor"] = cursor
 
         try:
-            response = Cli.adaptive_request_manager.perform_retriable_request(
-                lambda attempt_num: Cli.send_get_request(url, params)
+            response = HistoryDumper.adaptive_request_manager.perform_retriable_request(
+                lambda attempt_num: HistoryDumper.send_get_request(url, params),
             )
         except RuntimeError as e:
-            Cli.logger.error(str(e))
+            HistoryDumper.logger.error(str(e))
             sys.exit(1)
 
         d = response.json()
         try:
             if d['ok'] is False:
-                Cli.logger.error(f'API error encountered: {d!s}' % d)
+                HistoryDumper.logger.error(f'API error encountered: {d!s}' % d)
                 sys.exit(1)
 
             next_cursor = None
@@ -65,7 +64,7 @@ class Cli:
             return next_cursor, d
 
         except KeyError as e:
-            Cli.logger.error(f'Response processing error: {e!s}')
+            HistoryDumper.logger.error(f'Response processing error: {e!s}')
             return None, []
 
     @staticmethod
@@ -73,8 +72,7 @@ class Cli:
         next_cursor = None
         result = []
         while True:
-            Cli.request_series_printer.before_request()
-            next_cursor, data = Cli.fetch_at_cursor(
+            next_cursor, data = HistoryDumper.fetch_at_cursor(
                 url, params, cursor=next_cursor,
             )
 
@@ -83,7 +81,7 @@ class Cli:
                     data[combine_key]
                 )
             except KeyError as e:
-                Cli.logger.error(f'Response processing error: {e!s}')
+                HistoryDumper.logger.error(f'Response processing error: {e!s}')
                 sys.exit(1)
 
             if next_cursor is None:
@@ -92,14 +90,14 @@ class Cli:
 
     @staticmethod
     def fetch_channel_list(team_id=None):
-        channels_path = Cli.a.o + "/channels.json"
+        channels_path = HistoryDumper.a.o + "/channels.json"
         if os.path.exists(channels_path) is True:  # @FIXME load_from_cache() ?
             with open(channels_path, mode="r") as f:
                 cached = json.load(f)
-                Cli.logger.info(f'Channel list loaded from cache: {len(cached):d} channels')
+                HistoryDumper.logger.info(f'Channel list loaded from cache: {len(cached):d} channels')
                 return cached
 
-        Cli.logger.info('Channel list fetching starts...')
+        HistoryDumper.logger.info('Channel list fetching starts...')
         api_url = "https://slack.com/api/conversations.list"
         params = {
             # "token": os.environ["SLACK_USER_TOKEN"],
@@ -113,23 +111,22 @@ class Cli:
             "exclude_archived": True
         }
 
-        Cli.adaptive_request_manager.reinit()
-        Cli.request_series_printer.reinit()
-        Cli.request_series_printer.before_paginated_batch(api_url)
-        channels_list = Cli.fetch_paginated(
+        HistoryDumper.adaptive_request_manager.reinit()
+        HistoryDumper.adaptive_request_manager.before_paginated_batch(api_url)
+        channels_list = HistoryDumper.fetch_paginated(
             api_url,
             params,
             combine_key="channels",
         )
-        Cli.request_series_printer.after_paginated_batch()
-        Cli.logger.info(f'Channel list fetch successful: {len(channels_list):d} channels')
-        Cli.save(channels_list, "channels")
+        HistoryDumper.adaptive_request_manager.after_paginated_batch()
+        HistoryDumper.logger.info(f'Channel list fetch successful: {len(channels_list):d} channels')
+        HistoryDumper.save(channels_list, "channels")
 
         return channels_list
 
     @staticmethod
     def fetch_channel_history(channel_id, oldest=None, latest=None):
-        Cli.logger.info(f'Channel history fetching starts ({channel_id})...')
+        HistoryDumper.logger.info(f'Channel history fetching starts ({channel_id})...')
         params = {
             # "token": os.environ["SLACK_USER_TOKEN"],
             "channel": channel_id,
@@ -142,47 +139,46 @@ class Cli:
         if latest is not None:
             params["latest"] = latest
 
-        Cli.adaptive_request_manager.reinit()
-        Cli.request_series_printer.reinit()
-        Cli.request_series_printer.before_paginated_batch(api_url)
-        result_list = Cli.fetch_paginated(
+        HistoryDumper.adaptive_request_manager.reinit()
+        HistoryDumper.adaptive_request_manager.before_paginated_batch(api_url)
+        result_list = HistoryDumper.fetch_paginated(
             api_url,
             params,
             combine_key="messages",
         )
-        Cli.request_series_printer.after_paginated_batch()
-        Cli.logger.info(f'Channel history fetch successful ({channel_id}): {len(result_list):d} results')
+        HistoryDumper.adaptive_request_manager.after_paginated_batch()
+        HistoryDumper.logger.info(f'Channel history fetch successful ({channel_id}): {len(result_list):d} results')
         return result_list
 
     # @TODO reads from users.json, writes to users.json and user_list.json. bug? wut
     @staticmethod
     def fetch_user_list(team_id=None):
-        users_path = Cli.a.o + "/users.json"
+        users_path = HistoryDumper.a.o + "/users.json"
         if os.path.exists(users_path) is True:  # @FIXME load_from_cache() ?
             with open(users_path, mode="r") as f:
                 cached = json.load(f)
-                Cli.logger.info(f'User list loaded from cache: {len(cached):d} users')
+                HistoryDumper.logger.info(f'User list loaded from cache: {len(cached):d} users')
                 return cached
 
-        Cli.logger.info('User list fetching starts...')
+        HistoryDumper.logger.info('User list fetching starts...')
         api_url = "https://slack.com/api/users.list"
         params = {
             # "token": os.environ["SLACK_USER_TOKEN"],
             "limit": 1000,
             "team_id": team_id,
         }
-        Cli.request_series_printer.reinit()
-        Cli.adaptive_request_manager.reinit()
-        Cli.request_series_printer.before_paginated_batch(api_url)
-        users = Cli.fetch_paginated(
+
+        HistoryDumper.adaptive_request_manager.reinit()
+        HistoryDumper.adaptive_request_manager.before_paginated_batch(api_url)
+        users = HistoryDumper.fetch_paginated(
             api_url,
             params,
             combine_key="members",
         )
-        Cli.request_series_printer.after_paginated_batch()
+        HistoryDumper.adaptive_request_manager.after_paginated_batch()
 
-        Cli.logger.info(f'User list fetch successful: {len(users):d} users')
-        Cli.save(users, "users")
+        HistoryDumper.logger.info(f'User list fetch successful: {len(users):d} users')
+        HistoryDumper.save(users, "users")
 
         return users
 
@@ -190,18 +186,16 @@ class Cli:
     def fetch_channel_replies(timestamps, channel_id):
         requests_estimated = len(timestamps)
         if requests_estimated == 0:
-            Cli.logger.info(f'No timestamps - no replies. Skipping ({channel_id})')
+            HistoryDumper.logger.info(f'No timestamps - no replies. Skipping ({channel_id})')
             return []
-
-        Cli.logger.info(f'Channel replies fetching starts ({channel_id})...')
-        Cli.logger.info(f'Request amount (estimated): {requests_estimated:d}')
-        Cli.request_series_printer.reinit(requests_estimated)
-        Cli.adaptive_request_manager.reinit()
 
         replies = []
         api_url = "https://slack.com/api/conversations.replies"
+        HistoryDumper.logger.info(f'Channel replies fetching starts ({channel_id})...')
+        HistoryDumper.logger.info(f'Request amount (estimated): {requests_estimated:d}')
 
-        Cli.request_series_printer.before_paginated_batch(api_url)
+        HistoryDumper.adaptive_request_manager.reinit(requests_estimated)
+        HistoryDumper.adaptive_request_manager.before_paginated_batch(api_url)
         for timestamp in timestamps:
             params = {
                 # "token": os.environ["SLACK_USER_TOKEN"],
@@ -209,15 +203,15 @@ class Cli:
                 "ts": timestamp,
                 "limit": 1000,
             }
-            result = Cli.fetch_paginated(
+            result = HistoryDumper.fetch_paginated(
                 api_url,
                 params,
                 combine_key="messages",
             )
             replies.append(result)
 
-        Cli.request_series_printer.after_paginated_batch()
-        Cli.logger.info(f'Channel replies fetch successful ({channel_id}): {len(replies):d} results')
+        HistoryDumper.adaptive_request_manager.after_paginated_batch()
+        HistoryDumper.logger.info(f'Channel replies fetch successful ({channel_id}): {len(replies):d} results')
         return replies
 
     @staticmethod
@@ -238,9 +232,9 @@ class Cli:
             else:
                 ch_type = "channel"
             if "creator" in channel:
-                ch_ownership = "created by %s" % Cli.name_from_uid(channel["creator"], users)
+                ch_ownership = "created by %s" % HistoryDumper.name_from_uid(channel["creator"], users)
             elif "user" in channel:
-                ch_ownership = "with %s" % Cli.name_from_uid(channel["user"], users)
+                ch_ownership = "with %s" % HistoryDumper.name_from_uid(channel["user"], users)
             else:
                 ch_ownership = ""
             ch_name = " %s:" % ch_name if ch_name.strip() != "" else ch_name
@@ -340,8 +334,8 @@ class Cli:
         for msg in messages:
             if "user" in msg:
                 usr = {
-                    "name": Cli.name_from_uid(msg["user"], users),
-                    "real_name": Cli.name_from_uid(msg["user"], users, real=True),
+                    "name": HistoryDumper.name_from_uid(msg["user"], users),
+                    "real_name": HistoryDumper.name_from_uid(msg["user"], users, real=True),
                 }
             else:
                 usr = {"name": "", "real_name": "none"}
@@ -352,7 +346,7 @@ class Cli:
             text = msg["text"] if msg["text"].strip() != "" else "[no message content]"
             for u in [x["id"] for x in users]:  # it takes BILLIONS to iterate user list with 50k users. refactoring required
                 text = str(text).replace(
-                    "<@%s>" % u, "<@%s> (%s)" % (u, Cli.name_from_uid(u, users))
+                    "<@%s>" % u, "<@%s> (%s)" % (u, HistoryDumper.name_from_uid(u, users))
                 )
 
             entry = "Message at %s\nUser: %s (%s)\n%s" % (
@@ -365,7 +359,7 @@ class Cli:
                 rxns = msg["reactions"]
                 entry += "\nReactions: " + ", ".join(
                     "%s (%s)"
-                    % (x["name"], ", ".join(Cli.name_from_uid(u, users) for u in x["users"]))
+                    % (x["name"], ", ".join(HistoryDumper.name_from_uid(u, users) for u in x["users"]))
                     for x in rxns
                 )
             if "files" in msg:
@@ -399,7 +393,7 @@ class Cli:
     def parse_replies(threads, users):
         body = ""
         for thread in threads:
-            body += Cli.parse_channel_history(thread, users, check_thread=True)
+            body += HistoryDumper.parse_channel_history(thread, users, check_thread=True)
             body += "\n"
 
         return body
@@ -418,7 +412,6 @@ class Cli:
                 return channel['id']
 
     logger: Logger = Logger.get_instance(require_new=True)
-    request_series_printer: RequestSeriesPrinter = RequestSeriesPrinter.get_instance()
     adaptive_request_manager: AdaptiveRequestManager = AdaptiveRequestManager.get_instance()
 
     a: Namespace
@@ -427,7 +420,7 @@ class Cli:
     sep_str: str
 
     def __init__(self):
-        env_file = os.path.join(os.path.dirname(__file__), ".env")
+        env_file = os.path.join(os.getcwd(), ".env")
         if os.path.isfile(env_file):
             load_dotenv(env_file)
 
@@ -441,33 +434,31 @@ class Cli:
 
     def _invoke(self):
         try:
-            Cli.HEADERS = {"Authorization": "Bearer %s" % os.environ["SLACK_USER_TOKEN"]}
+            HistoryDumper.HEADERS = {"Authorization": "Bearer %s" % os.environ["SLACK_USER_TOKEN"]}
         except KeyError:
             raise RuntimeError('Missing SLACK_USER_TOKEN in environment variables')
+        HistoryDumper.a = HistoryDumper.parse_args()
 
-        Cli.a = Cli.parse_args()
+        HistoryDumper.ts = str(datetime.strftime(datetime.now(), "%m-%d-%Y_%H%M%S"))
+        HistoryDumper.sep_str = "*" * 24
 
-        Cli.ts = str(datetime.strftime(datetime.now(), "%m-%d-%Y_%H%M%S"))
-        Cli.sep_str = "*" * 24
-
-        Cli.adaptive_request_manager.apply_app_args(Cli.a)
+        HistoryDumper.adaptive_request_manager.apply_app_args(HistoryDumper.a)
 
         # ----------------------------------------------------------------------
 
-        Cli.ch_list = Cli.fetch_channel_list()
-        ch_map_id = {v.get('id'): v for v in Cli.ch_list}  # @TODO optimize find-by-id methods
+        HistoryDumper.ch_list = HistoryDumper.fetch_channel_list()
+        ch_map_id = {v.get('id'): v for v in HistoryDumper.ch_list}  # @TODO optimize find-by-id methods
 
-        if Cli.a.lc:
-            user_list = Cli.fetch_user_list()
-            data = Cli.ch_list if Cli.a.json else Cli.parse_channel_list(Cli.ch_list, user_list)
-            Cli.save(data, "channel_list")
-        if Cli.a.lu:
-            user_list = Cli.fetch_user_list()
-            data = user_list if Cli.a.json else Cli.parse_user_list(user_list)
-            Cli.save(data, "user_list")
-        if Cli.a.c:
-            user_list = Cli.fetch_user_list()
-            ch = Cli.a.ch
+        if HistoryDumper.a.lc:
+            user_list = HistoryDumper.fetch_user_list()
+            data = HistoryDumper.ch_list if HistoryDumper.a.json else HistoryDumper.parse_channel_list(HistoryDumper.ch_list, user_list)
+            HistoryDumper.save(data, "channel_list")
+        if HistoryDumper.a.lu:
+            user_list = HistoryDumper.fetch_user_list()
+            data = user_list if HistoryDumper.a.json else HistoryDumper.parse_user_list(user_list)
+        if HistoryDumper.a.c:
+            user_list = HistoryDumper.fetch_user_list()
+            ch = HistoryDumper.a.ch
             if ch:
                 if ch.endswith('.json'):
                     with open(ch, mode="r") as f:
@@ -476,29 +467,29 @@ class Cli:
                     ch_names = ch.split(',')
                 ch_names = [ch.lstrip('#') for ch in ch_names]
                 for ch_name in ch_names:
-                    Cli.ch_id = Cli.id_from_ch_name(ch_name, Cli.ch_list)
+                    HistoryDumper.ch_id = HistoryDumper.id_from_ch_name(ch_name, HistoryDumper.ch_list)
                     # what if it WAS an id from the beginning?
-                    if not Cli.ch_id:
+                    if not HistoryDumper.ch_id:
                         if ch_name in ch_map_id.keys():
-                            Cli.ch_id = ch_name
-                    if Cli.ch_id:
-                        ch_save_path = Cli.get_channel_save_path(Cli.ch_id, Cli.ch_list)
-                        ch_hist = Cli.load_from_cache(ch_save_path)
+                            HistoryDumper.ch_id = ch_name
+                    if HistoryDumper.ch_id:
+                        ch_save_path = HistoryDumper.get_channel_save_path(HistoryDumper.ch_id, HistoryDumper.ch_list)
+                        ch_hist = HistoryDumper.load_from_cache(ch_save_path)
                         if ch_hist is None:
-                            ch_hist = Cli.fetch_channel_history(Cli.ch_id, oldest=Cli.a.fr, latest=Cli.a.to)
-                        Cli.save_channel_history(ch_hist, Cli.ch_id, Cli.ch_list, user_list)
+                            ch_hist = HistoryDumper.fetch_channel_history(HistoryDumper.ch_id, oldest=HistoryDumper.a.fr, latest=HistoryDumper.a.to)
+                        HistoryDumper.save_channel_history(ch_hist, HistoryDumper.ch_id, HistoryDumper.ch_list, user_list)
                     else:
-                        Cli.logger.warn(f"Channel ID not found for name '{ch_name}', skipping")
+                        HistoryDumper.logger.warn(f"Channel ID not found for name '{ch_name}', skipping")
             else:
-                for ch_id in [x["id"] for x in Cli.ch_list]:
-                    ch_hist = Cli.fetch_channel_history(ch_id, oldest=Cli.a.fr, latest=Cli.a.to)
-                    Cli.save_channel_history(ch_hist, ch_id, Cli.ch_list, user_list)
+                for ch_id in [x["id"] for x in HistoryDumper.ch_list]:
+                    ch_hist = HistoryDumper.fetch_channel_history(ch_id, oldest=HistoryDumper.a.fr, latest=HistoryDumper.a.to)
+                    HistoryDumper.save_channel_history(ch_hist, ch_id, HistoryDumper.ch_list, user_list)
         # elif, since we want to avoid asking for channel_history twice
-        elif Cli.a.r:
-            user_list = Cli.fetch_user_list()
-            for ch_id in [x["id"] for x in Cli.fetch_channel_list()]:
-                ch_hist = Cli.fetch_channel_history(ch_id, oldest=Cli.a.fr, latest=Cli.a.to)
-                Cli.save_channel_replies(ch_hist, ch_id, Cli.ch_list, user_list)
+        elif HistoryDumper.a.r:
+            user_list = HistoryDumper.fetch_user_list()
+            for ch_id in [x["id"] for x in HistoryDumper.fetch_channel_list()]:
+                ch_hist = HistoryDumper.fetch_channel_history(ch_id, oldest=HistoryDumper.a.fr, latest=HistoryDumper.a.to)
+                HistoryDumper.save_channel_replies(ch_hist, ch_id, HistoryDumper.ch_list, user_list)
 
     @staticmethod
     def parse_args():
@@ -511,7 +502,7 @@ class Cli:
         )
         parser.add_argument(
             "-o",
-            help="Directory in which to save output files (if set empty, prints to stdout)",
+            help="Directory in which to save output files (default '.slack-backup')",
             default=".slack-backup",
             action="store", type=str
         )
@@ -573,55 +564,55 @@ class Cli:
     @staticmethod
     def get_output_dir_path():
         return os.path.abspath(
-            os.path.expanduser(os.path.expandvars(Cli.a.o))
+            os.path.expanduser(os.path.expandvars(HistoryDumper.a.o))
         )
 
     @staticmethod
     def save(data, filename):
-        if Cli.a.o is None:
+        if HistoryDumper.a.o is None:
             json.dump(print(data), sys.stdout, indent=4)
         else:
-            out_dir = Cli.get_output_dir_path()
-            filename = filename + ".json" if Cli.a.json else filename + ".txt"
+            out_dir = HistoryDumper.get_output_dir_path()
+            filename = filename + ".json" if HistoryDumper.a.json else filename + ".txt"
             full_filepath = os.path.join(out_dir, filename)
 
             os.makedirs(os.path.dirname(full_filepath), exist_ok=True)
 
-            Cli.logger.info(f'Writing to {full_filepath}... ')
-            if Cli.a.json:
+            HistoryDumper.logger.info(f'Writing to {full_filepath}... ')
+            if HistoryDumper.a.json:
                 data = json.dumps(data, indent=4, ensure_ascii=False)
             with open(full_filepath, mode="w", encoding="utf-8") as f:
                 f.write(data)
-            Cli.logger.info(f'Writing done ({fmt_sizeof(len(data)).strip()})')
+            HistoryDumper.logger.info(f'Writing done ({fmt_sizeof(len(data)).strip()})')
 
     @staticmethod
     def load_from_cache(filename) -> List|None:
         # if file is found: read it and return list
         # if file is not found: return None
-        full_filepath = os.path.join(Cli.get_output_dir_path(), filename + ".json")
+        full_filepath = os.path.join(HistoryDumper.get_output_dir_path(), filename + ".json")
         if os.path.exists(full_filepath):
             with open(full_filepath, mode="r", encoding="utf-8") as f:
                 return json.load(f)
         else:
-            Cli.logger.debug(f"Cache miss: {filename}")
+            HistoryDumper.logger.debug(f"Cache miss: {filename}")
             return None
 
     @staticmethod
     def get_channel_replies_save_path(ch_id, ch_list):
-        return "%s--replies" % Cli.get_channel_save_path(ch_id, ch_list)
+        return "%s--replies" % HistoryDumper.get_channel_save_path(ch_id, ch_list)
 
     @staticmethod
     def save_channel_replies(channel_hist, channel_id, channel_list, users):
-        replies_save_path = Cli.get_channel_replies_save_path(channel_id, channel_list)
+        replies_save_path = HistoryDumper.get_channel_replies_save_path(channel_id, channel_list)
 
-        if Cli.load_from_cache(replies_save_path) is not None:  # can be empty list
-            Cli.logger.info(f"Found in cache, skipping: {replies_save_path}")
+        if HistoryDumper.load_from_cache(replies_save_path) is not None:  # can be empty list
+            HistoryDumper.logger.info(f"Found in cache, skipping: {replies_save_path}")
             return
 
         reply_timestamps = [x["ts"] for x in channel_hist if "reply_count" in x]
-        ch_replies = Cli.fetch_channel_replies(reply_timestamps, channel_id)
-        ch_name, ch_type = Cli.name_from_ch_id(channel_id, channel_list)
-        if Cli.a.json:
+        ch_replies = HistoryDumper.fetch_channel_replies(reply_timestamps, channel_id)
+        ch_name, ch_type = HistoryDumper.name_from_ch_id(channel_id, channel_list)
+        if HistoryDumper.a.json:
             data_replies = ch_replies
         else:
             header_str = "Threads in %s: %s\n%s Messages" % (
@@ -629,37 +620,37 @@ class Cli:
                 ch_name,
                 len(ch_replies),
             )
-            data_replies = Cli.parse_replies(ch_replies, users)
-            data_replies = "%s\n%s\n\n%s" % (header_str, Cli.sep_str, data_replies)
-        Cli.save(data_replies, replies_save_path)
+            data_replies = HistoryDumper.parse_replies(ch_replies, users)
+            data_replies = "%s\n%s\n\n%s" % (header_str, HistoryDumper.sep_str, data_replies)
+        HistoryDumper.save(data_replies, replies_save_path)
 
     @staticmethod
     def get_channel_save_path(ch_id, ch_list):
-        ch_name, ch_type = Cli.name_from_ch_id(ch_id, ch_list)
+        ch_name, ch_type = HistoryDumper.name_from_ch_id(ch_id, ch_list)
         return "%s/%s" % (ch_name, ch_name)
 
     @staticmethod
     def save_channel_history(channel_hist, channel_id, channel_list, users):
-        channel_save_path = Cli.get_channel_save_path(channel_id, channel_list)
-        if Cli.load_from_cache(channel_save_path) is None:
-            ch_name, ch_type = Cli.name_from_ch_id(channel_id, channel_list)
-            if Cli.a.json:
+        channel_save_path = HistoryDumper.get_channel_save_path(channel_id, channel_list)
+        if HistoryDumper.load_from_cache(channel_save_path) is None:
+            ch_name, ch_type = HistoryDumper.name_from_ch_id(channel_id, channel_list)
+            if HistoryDumper.a.json:
                 data_ch = channel_hist
             else:
-                data_ch = Cli.parse_channel_history(channel_hist, users)
+                data_ch = HistoryDumper.parse_channel_history(channel_hist, users)
                 header_str = "%s Name: %s" % (ch_type, ch_name)
                 data_ch = (
                         "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
-                        % (channel_id, header_str, len(channel_hist), Cli.sep_str)
+                        % (channel_id, header_str, len(channel_hist), HistoryDumper.sep_str)
                         + data_ch
                 )
-            Cli.save(data_ch, channel_save_path)
+            HistoryDumper.save(data_ch, channel_save_path)
         else:
-            Cli.logger.info(f"Found in cache, skipping: {channel_save_path}")
+            HistoryDumper.logger.info(f"Found in cache, skipping: {channel_save_path}")
 
-        if Cli.a.r:
-            Cli.save_channel_replies(channel_hist, channel_id, channel_list, users)
+        if HistoryDumper.a.r:
+            HistoryDumper.save_channel_replies(channel_hist, channel_id, channel_list, users)
 
 
 if __name__ == "__main__":
-    Cli().run()
+    HistoryDumper().run()

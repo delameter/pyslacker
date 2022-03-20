@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -----------------------------------------------------------------------------
-# script for batch emoji download
+# script for batch slack emoji download
 # 2022 A. Shavykin <0.delameter@gmail.com>
 # -----------------------------------------------------------------------------
 # SEMI-MANUAL MODE ONLY
@@ -24,11 +24,10 @@ from typing import List, Dict, cast, Tuple
 import requests
 from requests import Response
 
-from adaptive_request_manager import AdaptiveRequestManager
-from exception_handler import ExceptionHandler
-from logger import Logger
-from request_series_printer import RequestSeriesPrinter
-from util.io import fmt_sizeof
+from pyslacker.core.adaptive_request_manager import AdaptiveRequestManager
+from pyslacker.core.exception_handler import ExceptionHandler
+from pyslacker.core.logger import Logger
+from pyslacker.util.io import fmt_sizeof
 
 
 class Downloader:
@@ -41,28 +40,26 @@ class Downloader:
             return
 
         self._logger.info(f'Downloading starts for {len(emojis):n} emojis')
-        App.request_series_printer.reinit(len(emojis))
-        App.adaptive_request_manager.reinit()
+        EmojiDumper.adaptive_request_manager.reinit(len(emojis))
 
-        App.request_series_printer.before_paginated_batch(origin)
+        EmojiDumper.adaptive_request_manager.before_paginated_batch(origin)
         for emoji in emojis:
-            App.request_series_printer.before_request()
             try:
-                App.adaptive_request_manager.perform_retriable_request(
-                    lambda attempt_num: self.download(emoji)
+                EmojiDumper.adaptive_request_manager.perform_retriable_request(
+                    lambda attempt_num: self.download(emoji),
+                    lambda emoji: emoji.name,
                 )
             except RuntimeError as e:
                 self._logger.error(str(e))
                 sys.exit(1)
 
-        App.request_series_printer.after_paginated_batch()
+        EmojiDumper.adaptive_request_manager.after_paginated_batch()
 
     def download(self, emoji: EmojiRegular) -> Tuple[Response, int]:
         if os.path.isfile(emoji.filepath):
             raise FileExistsError(f'File already exists: {emoji.filepath}')
 
         self._logger.debug(f'Fetching: {emoji.url}')
-        App.request_series_printer.print_event(f'{emoji.name}', once=True)
         response: Response = requests.get(emoji.url, timeout=(10, 30), stream=True)
 
         self._logger.debug(f'Writing: {emoji.filepath}')
@@ -225,16 +222,14 @@ class JsonReader:
 
 
 # noinspection PyMethodMayBeStatic
-class App:
-    request_series_printer: RequestSeriesPrinter
+class EmojiDumper:
     adaptive_request_manager: AdaptiveRequestManager
 
     def __init__(self):
         locale.setlocale(locale.LC_ALL, '')
 
         self.logger = Logger.get_instance(require_new=True)
-        App.request_series_printer = RequestSeriesPrinter.get_instance()
-        App.adaptive_request_manager = AdaptiveRequestManager.get_instance()
+        EmojiDumper.adaptive_request_manager = AdaptiveRequestManager.get_instance()
         self.args: Namespace
 
     def run(self):
@@ -263,4 +258,4 @@ class App:
 
 
 if __name__ == '__main__':
-    App().run()
+    EmojiDumper().run()

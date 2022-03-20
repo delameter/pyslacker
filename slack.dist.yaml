@@ -2,7 +2,7 @@ _metadata:
   major_version: 1
   minor_version: 1
 display_information:
-  name: Slack Exporter
+  name: pyslacker
   description: Export publicly visible channel data as text or JSON.
 features:
   app_home:
@@ -10,7 +10,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: Slack Exporter
+    display_name: pyslacker
     always_online: true
   # slash_commands:
   #   - command: /export-channel

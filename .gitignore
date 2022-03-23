@@ -1,4 +1,5 @@
 .env
+venv
 exports
 __pycache__
 .idea
@@ -9,3 +10,4 @@ log
 channel.json
 emoji.json
 slack.yaml
+

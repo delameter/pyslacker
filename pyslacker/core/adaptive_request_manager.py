@@ -23,8 +23,6 @@ class AdaptiveRequestManager(RequestFlowInterace, metaclass=Singleton):
     SAMPLES_MAX_LEN = 60
     OPTIMIZING_THRESHOLD_MIN = 1.5  # starts to decrease delay after THRESHOLD minutes without rate limit errors
 
-    DELAY_POST_MIN_SEC = 0.0
-    DELAY_POST_REQUEST_INITIAL_SEC = DELAY_POST_MIN_SEC
     DELAY_POST_REQUEST_STABILIZE_SEC = .20
     DELAY_POST_REQUEST_OPTIMIZE_SEC = .10
     # exponential, but at the same time small and slow at start:
@@ -41,15 +39,13 @@ class AdaptiveRequestManager(RequestFlowInterace, metaclass=Singleton):
         self._req_seq_renderer: RequestSequenceRenderer = cast(RequestSequenceRenderer, RequestSequenceRenderer.get_instance())
         self._logger = Logger.get_instance()
 
-        self._post_req_delay: float = 0
+        self._delay_adjustment_enabled = True
+        self._post_req_delay: float = 0.0
+        self._post_req_delay_min: float = 0.0
         self._req_num: int
         self._successive_req_num: int
         self._samples: Deque[float] = Deque[float]()   # in seconds
         self._rpm: float
-        self._rpm_allowed_to_increase: bool = True
-
-        self._delay_adjustment_enabled = True
-        self._rpm_max: float|None = None  # None = disabled
 
         self.reinit()
 
@@ -62,24 +58,23 @@ class AdaptiveRequestManager(RequestFlowInterace, metaclass=Singleton):
         self._rpm = 0.0
 
         if self._delay_adjustment_enabled:
-            self._set_post_req_delay(self.DELAY_POST_REQUEST_INITIAL_SEC)
+            self._set_post_req_delay(self._post_req_delay_min)
         else:
             self._post_req_delay = 0.0
 
     def apply_app_args(self, args: Namespace):
         if args.A:
             self._delay_adjustment_enabled = False
-        if args.x:
-            self._rpm_max = max(0.0, args.x)
-            if isclose(0, self._rpm_max, abs_tol=1e-03):
-                self._rpm_max = None
+        if args.n:
+            self._post_req_delay_min = max(0.0, args.n)
+            if isclose(0, self._post_req_delay_min, abs_tol=1e-03):
+                self._post_req_delay_min = 0.0
 
     def before_paginated_batch(self, url: str):
         self._req_seq_renderer.before_paginated_batch(url)
 
     def after_paginated_batch(self):
         self._req_seq_renderer.after_paginated_batch()
-        pass
 
     def perform_retriable_request(self,
                                   request_fn: Callable[[int], Tuple[Response, int]],
@@ -155,9 +150,8 @@ class AdaptiveRequestManager(RequestFlowInterace, metaclass=Singleton):
     def _optimize_flow(self):  # decrease the delay
         if not self._delay_adjustment_enabled:
             return
-        self._apply_rpm_limit()
         self._successive_req_num += 1
-        if self.minutes_without_failures >= self.OPTIMIZING_THRESHOLD_MIN and self._rpm_allowed_to_increase:
+        if self.minutes_without_failures >= self.OPTIMIZING_THRESHOLD_MIN:
             self._shift_pre_request_delay(-1 * self.DELAY_POST_REQUEST_OPTIMIZE_SEC)
             self._successive_req_num = 0
         sleep(self._post_req_delay)
@@ -167,20 +161,20 @@ class AdaptiveRequestManager(RequestFlowInterace, metaclass=Singleton):
             return self.DELAY_TRANSPORT_FAILURE_SEC[attempt_num]
         return self.DELAY_TRANSPORT_FAILURE_STATIC_SEC
 
-    def _set_post_req_delay(self, new_value: float):
-        new_value = max(self.DELAY_POST_MIN_SEC, new_value)
+    def _set_post_req_delay(self, new_value: float, delta_sign: int = None):
+        new_value = max(self._post_req_delay_min, new_value)
         if isclose(self._post_req_delay, new_value, abs_tol=1e-03):
             return
         self._post_req_delay = new_value
 
-    def _shift_pre_request_delay(self, delta: float):
-        if delta < 0 and isclose(self.DELAY_POST_MIN_SEC, self._post_req_delay, abs_tol=1e-03):
-            return
-        self._set_post_req_delay(self._post_req_delay + delta)
-
-        self._req_seq_renderer.on_post_request_delay_update(int(delta / abs(delta)))
-        self._req_seq_renderer.print_event(f'Set post-request delay to {self._post_req_delay:.2f}s', persist=True)
+        self._req_seq_renderer.on_post_request_delay_update(delta_sign)
+        self._req_seq_renderer.print_event(f'Set post-request delay to {self._post_req_delay:.2f}s', persist=bool(delta_sign))
         self._logger.info(f'[ReqManager] Set post-request delay to {self._post_req_delay:.2f}s', silent=True)
+
+    def _shift_pre_request_delay(self, delta: float):
+        if delta < 0 and isclose(self._post_req_delay_min, self._post_req_delay, abs_tol=1e-03):
+            return
+        self._set_post_req_delay(self._post_req_delay + delta, int(delta / abs(delta)))
 
     def _sleep(self, seconds: float):
         while seconds > 1:
@@ -188,12 +182,6 @@ class AdaptiveRequestManager(RequestFlowInterace, metaclass=Singleton):
             seconds -= 1
             sleep(1)
         sleep(seconds)
-
-    def _apply_rpm_limit(self):
-        if not self._rpm:
-            return  # not enough data yet
-        # @TODO
-        pass
 
     @property
     def rpm(self) -> float|None:

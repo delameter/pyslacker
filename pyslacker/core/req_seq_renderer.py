@@ -54,9 +54,9 @@ class RenderQueue(Deque[Renderable]):
     def __repr__(self):
         return f'[{(self._prev_frame_time_ns - time.time_ns()) / 1e9:.2f}s] ' + '; '.join([f.__repr__() for f in self])
 
-    def iterate(self, pop=False, simulate_duration_sec: float = None) -> Renderable|None:
+    def iterate(self, pop=False, simulate_duration_sec: float = None) -> Renderable | None:
         cur_frame_time_ns = time.time_ns()
-        frame_duraion_sec = (cur_frame_time_ns - self._prev_frame_time_ns)/1e9
+        frame_duraion_sec = (cur_frame_time_ns - self._prev_frame_time_ns) / 1e9
         self._prev_frame_time_ns = cur_frame_time_ns
         if simulate_duration_sec:
             frame_duraion_sec = simulate_duration_sec
@@ -91,11 +91,10 @@ class RenderQueueManager:
 
 # noinspection PyAttributeOutsideInit
 class RequestSequenceRenderer(RequestFlowInterace, metaclass=Singleton):
-    REQUEST_DELTA_MAX_LEN = 40
-
     INDENT = 3 * ' '
     PROGRESS_BAR_SIZE = 5
     MARKER_TTL = 3
+    PERSIST_EVERY_NTH_REQUEST = 100
 
     def __init__(self):
         self._logger = Logger.get_instance()
@@ -111,11 +110,11 @@ class RequestSequenceRenderer(RequestFlowInterace, metaclass=Singleton):
         self._current_line_cache = ''
         self._render_phase: int = 0
 
-        self._requests_estimated: int|None = requests_estimated
+        self._requests_estimated: int | None = requests_estimated
         self._requests_successful = 0
         self._request_num = 0
         self._attempt_num = 0
-        self._request_url: str|None = None
+        self._request_url: str | None = None
         self._response_size_sum: int = 0
 
         self._request_progress_perc: float | None = None
@@ -265,7 +264,7 @@ class RequestSequenceRenderer(RequestFlowInterace, metaclass=Singleton):
         self._render_size()
 
         self._render_phase = 2
-        if self._request_num % 10 == 0:
+        if self._request_num % self.PERSIST_EVERY_NTH_REQUEST == 0:
             self._persist_line()
 
     # -----------------------------------------------------------------------------

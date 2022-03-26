@@ -120,7 +120,7 @@ class HistoryDumper:
         )
         HistoryDumper.adaptive_request_manager.after_paginated_batch()
         HistoryDumper.logger.info(f'Channel list fetch successful: {len(channels_list):d} channels')
-        HistoryDumper.save(channels_list, "channels")
+        HistoryDumper.save(channels_list, "channels", 'json')
 
         return channels_list
 
@@ -178,7 +178,7 @@ class HistoryDumper:
         HistoryDumper.adaptive_request_manager.after_paginated_batch()
 
         HistoryDumper.logger.info(f'User list fetch successful: {len(users):d} users')
-        HistoryDumper.save(users, "users")
+        HistoryDumper.save(users, "users", 'json')
 
         return users
 
@@ -449,15 +449,15 @@ class HistoryDumper:
         HistoryDumper.ch_list = HistoryDumper.fetch_channel_list()
         ch_map_id = {v.get('id'): v for v in HistoryDumper.ch_list}  # @TODO optimize find-by-id methods
 
-        if HistoryDumper.a.lc:
-            user_list = HistoryDumper.fetch_user_list()
-            data = HistoryDumper.ch_list if HistoryDumper.a.json else HistoryDumper.parse_channel_list(HistoryDumper.ch_list, user_list)
-            HistoryDumper.save(data, "channel_list")
-        if HistoryDumper.a.lu:
-            user_list = HistoryDumper.fetch_user_list()
-            data = user_list if HistoryDumper.a.json else HistoryDumper.parse_user_list(user_list)
+        user_list = HistoryDumper.fetch_user_list()
+
+        if HistoryDumper.a.pc:
+            data = HistoryDumper.parse_channel_list(HistoryDumper.ch_list, user_list)
+            HistoryDumper.save(data, "channels_parsed", 'txt')
+        if HistoryDumper.a.pu:
+            data = HistoryDumper.parse_user_list(user_list)
+            HistoryDumper.save(data, "users_parsed", 'txt')
         if HistoryDumper.a.c:
-            user_list = HistoryDumper.fetch_user_list()
             ch = HistoryDumper.a.ch
             if ch:
                 if ch.endswith('.json'):
@@ -486,7 +486,6 @@ class HistoryDumper:
                     HistoryDumper.save_channel_history(ch_hist, ch_id, HistoryDumper.ch_list, user_list)
         # elif, since we want to avoid asking for channel_history twice
         elif HistoryDumper.a.r:
-            user_list = HistoryDumper.fetch_user_list()
             for ch_id in [x["id"] for x in HistoryDumper.fetch_channel_list()]:
                 ch_hist = HistoryDumper.fetch_channel_history(ch_id, oldest=HistoryDumper.a.fr, latest=HistoryDumper.a.to)
                 HistoryDumper.save_channel_replies(ch_hist, ch_id, HistoryDumper.ch_list, user_list)
@@ -497,7 +496,7 @@ class HistoryDumper:
             formatter_class=RawDescriptionHelpFormatter,
             epilog='\n'.join([
                 "RATE LIMIT COMPENSAION",
-                'This program considers rate limiting and by default dynamically adjusts post-request delay to minimize limit errors and work with reasonable speed at the same time. When <MAX_RPM> is not set, delay will slowly decrease after some amount of succeessful requests in a row and increase after failed requests. When <MAX_RPS> is set, adjuster works almost the same, except that it will try to keep request ratio not bigger than option.\n\nOption -A disables dynamic compensation completely - program just waits a few seconds and then retry. Delay duration is read from "Retry-After" header (if it is provided by web-server) - this algorithm is independent from dynamic compensation and works always).'
+                'This program considers rate limiting and by default dynamically adjusts post-request delay to minimize limit errors and work with reasonable speed at the same time. Delay will slowly decrease after some amount of succeessful requests in a row and increase after failed requests. Minimum (which equals initial) delay can be set with -n. Option -A disables dynamic compensation - program just waits a few seconds and then retry. Delay duration is read from "Retry-After" header (if it is provided by web-server) - this algorithm is independent from dynamic compensation and works always).'
             ])
         )
         parser.add_argument(
@@ -505,18 +504,6 @@ class HistoryDumper:
             help="Directory in which to save output files (default '.slack-backup')",
             default=".slack-backup",
             action="store", type=str
-        )
-        parser.add_argument(
-            "--lc", action="store_true", help="List all conversations in your workspace"
-        )
-        parser.add_argument(
-            "--lu", action="store_true", help="List all users in your workspace"
-        )
-        parser.add_argument(
-            "--json",
-            action="store_true",
-            help="Give the requested output in raw JSON format (no parsing)",
-            default=True
         )
         parser.add_argument(
             "-c", action="store_true", help="Get history for all accessible conversations (filters available, see below)"
@@ -541,13 +528,19 @@ class HistoryDumper:
             action="store_true",
             help="Get reply threads for all accessible conversations. Implies -c, but conversation history data is not writed to files at the end. Using them together (-cr) will save a lot of time if you want both history and replies",
         )
+        parser.add_argument(
+            "--pc", action="store_true", help="Parse channel list and save it in human-readable format alongwith json"
+        )
+        parser.add_argument(
+            "--pu", action="store_true", help="Parse user list and save it in human-readable format alongwith json"
+        )
         arm_group = parser.add_mutually_exclusive_group()
         arm_group.add_argument(
-            "-x",
-            metavar='<MAX_RPM>',
+            "-n",
+            metavar='<MIN_DELAY>',
             action="store",
             type=float,
-            help="Set max requests per minute; request delays will be dynamically adjusted to keep real RPM as close as possible to it (default = 0, auto) (see below)."
+            help="Set minimum delay beetween requests (default 0, no delay)."
         )
         arm_group.add_argument(
             "-A",
@@ -568,22 +561,18 @@ class HistoryDumper:
         )
 
     @staticmethod
-    def save(data, filename):
-        if HistoryDumper.a.o is None:
-            json.dump(print(data), sys.stdout, indent=4)
-        else:
-            out_dir = HistoryDumper.get_output_dir_path()
-            filename = filename + ".json" if HistoryDumper.a.json else filename + ".txt"
-            full_filepath = os.path.join(out_dir, filename)
+    def save(data, filename, fileformat):
+        out_dir = HistoryDumper.get_output_dir_path()
+        full_filepath = os.path.join(out_dir, filename + '.' + fileformat)
 
-            os.makedirs(os.path.dirname(full_filepath), exist_ok=True)
+        os.makedirs(os.path.dirname(full_filepath), exist_ok=True)
 
-            HistoryDumper.logger.info(f'Writing to {full_filepath}... ')
-            if HistoryDumper.a.json:
-                data = json.dumps(data, indent=4, ensure_ascii=False)
-            with open(full_filepath, mode="w", encoding="utf-8") as f:
-                f.write(data)
-            HistoryDumper.logger.info(f'Writing done ({fmt_sizeof(len(data)).strip()})')
+        HistoryDumper.logger.info(f'Writing to {full_filepath}... ')
+        if fileformat == 'json':
+            data = json.dumps(data, indent=4, ensure_ascii=False)
+        with open(full_filepath, mode="w", encoding="utf-8") as f:
+            f.write(data)
+        HistoryDumper.logger.info(f'Writing done ({fmt_sizeof(len(data)).strip()})')
 
     @staticmethod
     def load_from_cache(filename) -> List|None:
@@ -612,17 +601,18 @@ class HistoryDumper:
         reply_timestamps = [x["ts"] for x in channel_hist if "reply_count" in x]
         ch_replies = HistoryDumper.fetch_channel_replies(reply_timestamps, channel_id)
         ch_name, ch_type = HistoryDumper.name_from_ch_id(channel_id, channel_list)
-        if HistoryDumper.a.json:
-            data_replies = ch_replies
-        else:
-            header_str = "Threads in %s: %s\n%s Messages" % (
-                ch_type,
-                ch_name,
-                len(ch_replies),
-            )
-            data_replies = HistoryDumper.parse_replies(ch_replies, users)
-            data_replies = "%s\n%s\n\n%s" % (header_str, HistoryDumper.sep_str, data_replies)
-        HistoryDumper.save(data_replies, replies_save_path)
+
+        HistoryDumper.save(ch_replies, replies_save_path, 'json')
+        # @TODO TERRIBLY SLOW, refactoring required
+        #if HistoryDumper.a.p:
+        #    header_str = "Threads in %s: %s\n%s Messages" % (
+        #        ch_type,
+        #        ch_name,
+        #        len(ch_replies),
+        #    )
+        #    data_replies = HistoryDumper.parse_replies(ch_replies, users)
+        #    data_replies = "%s\n%s\n\n%s" % (header_str, HistoryDumper.sep_str, data_replies)
+        #    HistoryDumper.save(data_replies, replies_save_path, 'txt')
 
     @staticmethod
     def get_channel_save_path(ch_id, ch_list):
@@ -634,17 +624,17 @@ class HistoryDumper:
         channel_save_path = HistoryDumper.get_channel_save_path(channel_id, channel_list)
         if HistoryDumper.load_from_cache(channel_save_path) is None:
             ch_name, ch_type = HistoryDumper.name_from_ch_id(channel_id, channel_list)
-            if HistoryDumper.a.json:
-                data_ch = channel_hist
-            else:
-                data_ch = HistoryDumper.parse_channel_history(channel_hist, users)
-                header_str = "%s Name: %s" % (ch_type, ch_name)
-                data_ch = (
-                        "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
-                        % (channel_id, header_str, len(channel_hist), HistoryDumper.sep_str)
-                        + data_ch
-                )
-            HistoryDumper.save(data_ch, channel_save_path)
+            HistoryDumper.save(channel_hist, channel_save_path, 'json')
+            # @TODO TERRIBLY SLOW, refactoring required
+            #if HistoryDumper.a.p:
+            #    data_ch = HistoryDumper.parse_channel_history(channel_hist, users)
+            #    header_str = "%s Name: %s" % (ch_type, ch_name)
+            #    data_ch = (
+            #            "Channel ID: %s\n%s\n%s Messages\n%s\n\n"
+            #            % (channel_id, header_str, len(channel_hist), HistoryDumper.sep_str)
+            #            + data_ch
+            #    )
+            #    HistoryDumper.save(data_ch, channel_save_path, 'txt')
         else:
             HistoryDumper.logger.info(f"Found in cache, skipping: {channel_save_path}")
 

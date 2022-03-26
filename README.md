@@ -68,21 +68,22 @@ To use the ngrok method:
 
 ## Screenshots
 
-<img src="doc/screen1.png" alt="screenshot">
-Example of channel history export completed in 186 requests.
-<br><br>
-  
-<img src="doc/screen2.png" alt="screenshot">
-Running wrapper script with two channels specified.
-<br><br>
+Example of channel history export completed in 186 requests (all thumbnails are clickable):
 
-<img src="doc/screen3.png" alt="screenshot">
+<img src="doc/screen1.png" alt="screenshot" width="66%">
+  
+Running wrapper script with two channels specified:
+
+<img src="doc/screen2.png" alt="screenshot" width="66%">
+
 Running preparation script <code>warmup-cache.sh</code> which downloads full channel list and full user list. This is optional, because these lists will be loaded anyway before actual export starts; but in that case this will be done within export command, which might be confusing. 
+
+<img src="doc/screen3.png" alt="screenshot" width="66%"> 
 
 ## Contributors
 
 * [Seb Seager](https://github.com/sebseager) (original scripts)
-* [Aleksandr Shavykin](https://github.com/delameter) (refactoring, additional exporters)
+* [Aleksandr Shavykin](https://github.com/delameter) (refactoring, detailed output, more exporters)
 * [Mikhail Shipov](https://github.com/SkReD) (enchancements, fixes)
 
 ## License

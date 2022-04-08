@@ -1,8 +1,16 @@
-# pyslacker
+<h1 align="center">
+  <img src="doc/logo-96.png" height="96px"><br>
+  <code>
+    pyslacker
+  </code>
+  <br>
+</h1>
 
 A Slack bot and set of scripts for exporting history (and something more) from public channels, private channels and direct messages (DMs), using Slack's new Conversations API.
 
 A similar service is provided by Slack for workspace admins at [https://my.slack.com/services/export](https://my.slack.com/services/export) (where `my` can be replaced with your full workspace name to refer to a workspace different than your default). However, it can only access public channels, while `pyslacker` can retrieve data from any channel accessible to your user account.
+
+Based on [sebseager/slack-exporter](https://github.com/sebseager/slack-exporter)
 
 ## Authentication with Slack
 
@@ -20,20 +28,20 @@ There are two ways to use `pyslacker` (detailed below). Both require a Slack API
 
 Wrapper script `dump-history.sh` can create an archive of all accessible conversation history with all replies in your workspace.
 
-1. Either add 
+1. Either add
 
     ```text
     SLACK_USER_TOKEN = xoxp-xxxxxxxxxxxxx...
     ```
-    
-    to a file named `.env` in repo's root (run `cp .env.dist .env` if it doesn't exist) or run the following in your shell (replacing the value with the user token you obtained in the [Authentication with Slack](#authentication-with-slack) section above).
+
+   to a file named `.env` in repo's root (run `cp .env.dist .env` if it doesn't exist) or run the following in your shell (replacing the value with the user token you obtained in the [Authentication with Slack](#authentication-with-slack) section above).
 
     ```shell script
     export SLACK_USER_TOKEN=xoxp-xxxxxxxxxxxxx...
     ```
 
 2. Run `./warmup-cache.sh`. This script will download and cache channels and users from your workspace (this step is optional, but recommended).
-3. Type all channels you want to save as comma-separated list and run: `./dump-history.sh channel1,channel2`; 
+3. Type all channels you want to save as comma-separated list and run: `./dump-history.sh channel1,channel2`;
 4. ... or run `./dump-history-from-json.sh` which will use `channel.json` in repo's root as a source of channels to export (run `cp channel.dist.json channel.json` if file doesn't exist and add channels to copied file). If you skipped step 2, channel/user lists will be downloaded before actual export starts, but this needs to be done only once.
 
 #### Tips
@@ -59,24 +67,24 @@ To use the ngrok method:
 
 4. Create the following slash commands will be created (one for each applicable Flask route):
 
-    | Command         | Request URL                               | Arguments    | Example Usage        |
-    |-----------------|-------------------------------------------|--------------|----------------------|
-    | /export-channel | https://`[host_url]`/slack/export-channel | json \| text | /export-channel text |
-    | /export-replies | https://`[host_url]`/slack/export-replies | json \| text | /export-replies json |
+   | Command         | Request URL                               | Arguments    | Example Usage        |
+       |-----------------|-------------------------------------------|--------------|----------------------|
+   | /export-channel | https://`[host_url]`/slack/export-channel | json \| text | /export-channel text |
+   | /export-replies | https://`[host_url]`/slack/export-replies | json \| text | /export-replies json |
 
-    To do this, clone `slack.dist.yaml` as `slack.yaml`, uncomment the `slash-commands` section in `slack.yaml` and replace `YOUR_HOST_URL_HERE` with something like `https://xxxxxxxxxxxx.ngrok.io` (if using ngrok). Then navigate back to `OAuth & Permissions` and click `(Re)install to Workspace` to add these slash commands to the workspace (ensure the OAuth token in your `.env` file is still correct).
+   To do this, clone `slack.dist.yaml` as `slack.yaml`, uncomment the `slash-commands` section in `slack.yaml` and replace `YOUR_HOST_URL_HERE` with something like `https://xxxxxxxxxxxx.ngrok.io` (if using ngrok). Then navigate back to `OAuth & Permissions` and click `(Re)install to Workspace` to add these slash commands to the workspace (ensure the OAuth token in your `.env` file is still correct).
 
 ## Screenshots
 
 Example of channel history export completed in 186 requests (all thumbnails are clickable):
 
 <img src="doc/screen1.png" alt="screenshot" width="66%">
-  
+
 Running wrapper script with two channels specified:
 
 <img src="doc/screen2.png" alt="screenshot" width="66%">
 
-Running preparation script <code>warmup-cache.sh</code> which downloads full channel list and full user list. This is optional, because these lists will be loaded anyway before actual export starts; but in that case this will be done within export command, which might be confusing. 
+Running preparation script <code>warmup-cache.sh</code> which downloads full channel list and full user list. This is optional, because these lists will be loaded anyway before actual export starts; but in that case this will be done within export command, which might be confusing.
 
 <img src="doc/screen3.png" alt="screenshot" width="66%"> 
 

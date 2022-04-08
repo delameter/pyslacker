@@ -68,7 +68,7 @@ To use the ngrok method:
 4. Create the following slash commands will be created (one for each applicable Flask route):
 
    | Command         | Request URL                               | Arguments    | Example Usage        |
-       |-----------------|-------------------------------------------|--------------|----------------------|
+   |-----------------|-------------------------------------------|--------------|----------------------|
    | /export-channel | https://`[host_url]`/slack/export-channel | json \| text | /export-channel text |
    | /export-replies | https://`[host_url]`/slack/export-replies | json \| text | /export-replies json |
 

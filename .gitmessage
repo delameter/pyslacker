@@ -1,0 +1,31 @@
+#🌱 NEW: 
+#🐞 FIX: 
+#💎 REFACTOR: 
+
+#🔩 ADJUST: 
+#⌛ DRAFT: 
+#📙 DOCS: 
+#🚧 INIT
+#🔧 MAINTAIN: 
+#🚀 RELEASE: 
+#❌ REMOVE: 
+#💡 RESEARCH: 
+#💥 REWORK: 
+#🔨 SQUASH: [00] 
+#🆙 UPDATE: 
+#⏫ UPGRADE: 
+#🧪 TESTS: 
+
+# closes #00
+
+
+##-----------------------##----------------------------------------------------
+## es7s/gitmessage   v13 ## es7s projects commit normalizer
+## Oct-2022              ## A. Shavykin <0.delameter@gmail.com>
+
+# Run this command to make git use new commit template:
+#   git config --add commit.template .gitmessage
+
+# Latest version can always be found at:
+#   https://es7s.dlup.link/gitmessage
+#   https://github.com/es7s/core/blob/master/.gitmessage

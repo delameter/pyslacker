@@ -1,10 +1,14 @@
-<h1 align="center">
-  <img src="doc/logo-96.png" height="96px"><br>
-  <code>
-    pyslacker
-  </code>
-  <br>
-</h1>
+<div align="center">
+   <img src="https://user-images.githubusercontent.com/50381946/219900824-088508fe-49c6-4365-9bc4-53759d9c1aa3.png" width="96" height="96"><br>
+   <img src="https://user-images.githubusercontent.com/50381946/219900788-6f308c76-1808-4906-a4e5-9a1f323a53cc.png" width="400" height="64">
+</div>
+
+<div align="center">
+  <img src="https://img.shields.io/badge/python-3.8-3776AB?logo=python&logoColor=white&labelColor=333333">
+</div>
+<h1> </h1>
+
+
 
 A Slack bot and set of scripts for exporting history (and something more) from public channels, private channels and direct messages (DMs), using Slack's new Conversations API.
 
